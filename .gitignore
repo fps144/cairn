@@ -22,7 +22,11 @@ xcuserdata/
 .build/
 Packages/
 Package.pins
-# Package.resolved 通常提交;如需忽略再加
+.swiftpm/
+# Package.resolved 纳入版本控制(Cairn 是 App 不是 library,Apple 官方推荐)
+
+# M0.2 起产生的 .app bundle 输出(build/ 已在 Xcode 段匹配,此处为文档化意图)
+/build/
 
 # Python (probe)
 __pycache__/
