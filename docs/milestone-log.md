@@ -19,7 +19,10 @@
 
 ## 待完成
 
-- [ ] M1.1 - M1.5 ...(详见 spec §8.4)
+- [ ] M1.2 CairnStorage(GRDB + 11 表 + migrator)
+- [ ] M1.3 主窗口三区布局
+- [ ] M1.4 多 Tab + PTY 生命周期
+- [ ] M1.5 水平分屏 + OSC 7 + 布局持久化
 - [ ] M2.1 - M2.7 ...(详见 spec §8.5)
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
@@ -27,6 +30,38 @@
 ---
 
 ## 已完成(逆序)
+
+### M1.1 CairnCore 数据类型
+
+**Completed**: 2026-04-24
+**Tag**: `m1-1-done`
+**Commits**: 11 个(`334281d` … `e3ede8a`)
+
+**Summary**:
+- CairnCore 从占位升级为完整领域模型,11 个新 Swift 源文件 + 10 个测试文件
+- **7 实体**:`Workspace` / `Tab` / `Session` / `CairnTask` / `Event` / `Budget` / `Plan`(+ 内嵌 `PlanStep`)
+- **6 状态 enum**:`TabState`(2) / `SessionState`(5) / `TaskStatus`(4) / `BudgetState`(4) / `PlanStepStatus`(3) / `PlanStepPriority`(3)
+- **`EventType` 封闭 12 种**(对齐 spec §2.3,含 v1.1 预留 approval_*);**`ToolCategory` 开放集**(struct RawRepresentable)+ toolName 查表(含 M0.1 probe 扩展)+ `PlanSource` 3 种来源
+- **`Budget.computeState()` 纯函数**推导 state,遵守 spec §3 "Core 无状态" 纪律
+- **`CairnCore.jsonEncoder` / `jsonDecoder`** 共享实例,ISO-8601 日期策略
+- **54 个单元测试全绿**(远超 spec §8.4 要求的 10 个);跨 7 实体 JSON round-trip 覆盖
+
+**关键设计决策**(plan pinned):
+- 类型名 `CairnTask` 不是 `Task` —— 避免 Swift 标准库 `Task`(结构化并发)命名冲突
+- `ToolCategory` 用 struct RawRepresentable 实现"开放 enum";已知 12 种作静态常量,未知 toolName 兜底 `.other`
+- Equatable/Hashable 按所有字段(Swift synthesized),保证 round-trip 测试能真实验证字段完整性
+- Budget 状态推导为纯函数 `computeState()`;`.paused` 由用户手动设置,computeState 不自动恢复
+- 共享 JSONEncoder/Decoder 单例,但 `encode()` 未官方保证并发安全,M2.3 并发场景再按需改
+
+**Acceptance**: 见 M1.1 计划文档 T14 验收清单。
+
+**Known limitations**:
+- Approval 实体(spec §2.1 列出,v1.1 起用)本 milestone **不实现**
+- `PlanStep` 的 markdown 解析器留 M3.4(PlanWatcher)
+- Budget cost 计算依赖 api_usage 累加,具体模型价格表留 M3.3(BudgetTracker)
+- 所有实体的 SQLite 持久化留 M1.2(GRDB schema + DAO)
+
+---
 
 ### M0.2 Hello World macOS App
 
