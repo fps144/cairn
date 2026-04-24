@@ -19,7 +19,6 @@
 
 ## 待完成
 
-- [ ] M0.2 Hello World macOS App
 - [ ] M1.1 - M1.5 ...(详见 spec §8.4)
 - [ ] M2.1 - M2.7 ...(详见 spec §8.5)
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
@@ -28,6 +27,33 @@
 ---
 
 ## 已完成(逆序)
+
+### M0.2 Hello World macOS App
+
+**Completed**: 2026-04-24
+**Tag**: `m0-2-done`
+**Commits**: 8 个(`7f51602` … `ebb8266`)+ 本 log 记录
+
+**Summary**:
+- Package.swift 7 target(6 库 + 1 executable)按 spec §3.2 严格依赖方向声明
+- SwiftTerm 1.13.0 作为唯一第三方依赖接入(只暴露给 CairnTerminal);Package.resolved 纳入版本
+- `@main` SwiftUI App + ContentView 全屏嵌入 TerminalSurface(login shell idiom,走 .zprofile)
+- `scripts/make-app-bundle.sh` 把 `swift build` 产出打包成未签名 `build/Cairn.app`(Info.plist CFBundleIdentifier=com.cairn.app,plutil -lint 通过)
+- `swift build`(首次 40s,后续 ~3s)+ `swift test --filter CairnCoreTests`(2 tests passed)全绿
+- `open build/Cairn.app` 成功拉起 CairnApp 进程(Mach-O arm64,parent=launchd),能干净退出
+
+**关键修订**(自检发现,详见 `docs/superpowers/plans/2026-04-24-m0-2-hello-world.md` Self-Review §6):
+- Plan 初稿 T6 TerminalSurface 含 3 个会让 swift build 编译失败的 API bug(`Terminal.getEnvironmentVariables` 不存在 / `view.send(data:)` 签名错 / `cd` 发送 hack 冗余)—— 用户要求深度自检时通过实读 SwiftTerm v1.13.0 源码修正,执行阶段 T6 一次编译通过
+
+**Acceptance**: 见 M0.2 计划文档 T11 验收清单。
+
+**Known limitations**:
+- 只有 `CairnCoreTests` 1 个 test target(2 个测试);其他 5 个库的测试随它们 milestone 填入
+- TerminalSurface 不做 delegate 回调(M1.4)、不做 OSC 7 cwd 跟踪(M1.5)
+- 无 icon.icns,Dock 用 macOS 默认 generic 图标;设计稿 / 图标留待 v0.1 Beta(M2.7)
+- 未签名路径,若 `.app` 产物被传输跨机(如下载到其他 Mac)触发 Gatekeeper 需 `xattr -rd com.apple.quarantine build/Cairn.app`;本机 swift build 产物不带 quarantine,直接 open 不触发
+
+---
 
 ### M0.1 仓库基础设施 + Probe 勘察
 
