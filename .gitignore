@@ -41,5 +41,7 @@ htmlcov/
 .idea/
 .vscode/
 
-# M0.1 probe-report 提交一次作为勘察结果。后续迭代如需忽略再打开下一行:
-# /probe/probe-report.md
+# probe-report.md 已在 commit fd238ca 作为 M0.1 勘察证据提交一次。
+# 启用下面这行,防止后续重跑 probe.py 污染工作树。
+# 历史版本可通过 `git show fd238ca:probe/probe-report.md` 查看。
+/probe/probe-report.md
