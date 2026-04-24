@@ -38,3 +38,46 @@ def test_parse_jsonl_lines_handles_malformed(tmp_path):
     assert results[0][1]["type"] == "ok"
     assert results[1][1] is None
     assert results[2][1]["type"] == "ok2"
+
+
+def test_find_jsonl_files(tmp_path):
+    from probe import find_jsonl_files
+
+    (tmp_path / "proj-a").mkdir()
+    (tmp_path / "proj-b").mkdir()
+    (tmp_path / "proj-a" / "s1.jsonl").write_text("")
+    (tmp_path / "proj-a" / "s2.jsonl").write_text("")
+    (tmp_path / "proj-b" / "s1.jsonl").write_text("")
+    (tmp_path / "proj-a" / "ignore.txt").write_text("not jsonl")
+
+    files = find_jsonl_files(tmp_path)
+    assert len(files) == 3
+    assert all(f.suffix == ".jsonl" for f in files)
+
+
+def test_find_jsonl_files_missing_dir(tmp_path):
+    from probe import find_jsonl_files
+    missing = tmp_path / "does-not-exist"
+    assert find_jsonl_files(missing) == []
+
+
+def test_collect_stats_on_minimal_fixture():
+    from probe import collect_stats
+
+    stats = collect_stats([FIXTURES / "sample_minimal.jsonl"])
+
+    assert stats['file_count'] == 1
+    assert stats['total_lines'] == 7
+
+    assert stats['entry_types']['system'] == 1
+    assert stats['entry_types']['user'] == 3
+    assert stats['entry_types']['assistant'] == 3
+
+    assert stats['content_block_types']['text'] == 3
+    assert stats['content_block_types']['thinking'] == 1
+    assert stats['content_block_types']['tool_use'] == 1
+    assert stats['content_block_types']['tool_result'] == 1
+
+    assert stats['tool_names']['Read'] == 1
+    assert 'input_tokens' in stats['usage_keys']
+    assert 'output_tokens' in stats['usage_keys']
