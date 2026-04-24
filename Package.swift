@@ -15,10 +15,17 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.13.0"),
+        .package(url: "https://github.com/groue/GRDB.swift", from: "7.10.0"),
     ],
     targets: [
         .target(name: "CairnCore"),
-        .target(name: "CairnStorage", dependencies: ["CairnCore"]),
+        .target(
+            name: "CairnStorage",
+            dependencies: [
+                "CairnCore",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
+        ),
         .target(name: "CairnClaude", dependencies: ["CairnCore", "CairnStorage"]),
         .target(
             name: "CairnTerminal",
@@ -31,5 +38,6 @@ let package = Package(
         .target(name: "CairnUI", dependencies: ["CairnServices", "CairnTerminal"]),
         .executableTarget(name: "CairnApp", dependencies: ["CairnUI"]),
         .testTarget(name: "CairnCoreTests", dependencies: ["CairnCore"]),
+        .testTarget(name: "CairnStorageTests", dependencies: ["CairnStorage"]),
     ]
 )
