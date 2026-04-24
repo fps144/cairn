@@ -1,21 +1,14 @@
 import SwiftUI
+import CairnTerminal
 
-/// Cairn 主内容视图。M0.2 里只占位,T7 嵌入 TerminalSurface。
+/// Cairn 主内容视图。M0.2 里全屏嵌入一个 TerminalSurface,
+/// 执行用户默认 shell。后续 milestone 加 toolbar / 分屏 / tab bar 等。
 public struct ContentView: View {
     public init() {}
 
     public var body: some View {
-        // T7 将用 TerminalSurface 替换下面这段 VStack
-        VStack(spacing: 12) {
-            Text("Cairn")
-                .font(.largeTitle)
-                .bold()
-            Text("M0.2 scaffold · Terminal integration pending (T7)")
-                .foregroundStyle(.secondary)
-                .font(.callout)
-        }
-        .frame(minWidth: 600, minHeight: 400)
-        .padding()
+        TerminalSurface()
+            .frame(minWidth: 600, minHeight: 400)
     }
 }
 
