@@ -55,7 +55,7 @@ scripts/
 
 **修改**:
 
-- `.gitignore` — 新增 `/build/` + `/.swiftpm/` + `/Package.resolved`(暂定,见 T1 决策)
+- `.gitignore` — 新增 `/build/` + `/.swiftpm/`(`Package.resolved` **纳入版本**,见 T1 决策)
 - `docs/milestone-log.md` — T10 追加 M0.2 完成条目
 
 ---
@@ -134,17 +134,18 @@ let package = Package(
 
 - [ ] **Step 2:.gitignore 补充 SPM 产物**
 
-`/Users/sorain/xiaomi_projects/AICoding/cairn/.gitignore` 已含 `.build/` 和 `Packages/`。追加 2 行(在 `Package.pins` 之后):
+`/Users/sorain/xiaomi_projects/AICoding/cairn/.gitignore` 已含 `.build/` 和 `Packages/`。追加(在 `Package.pins` 之后):
 
 ```gitignore
 # Swift Package Manager local state
 .swiftpm/
-/Package.resolved
 # M0.2 起产生的 .app bundle 输出
 /build/
 ```
 
-**决策**:`Package.resolved` 先忽略(小项目无 CI 复现锁定需求),v0.1 Beta 发布前再决定是否纳入版本。
+**同时删除原有的 `# Package.resolved 通常提交...` 那一段注释**(已过时)。
+
+**决策**:`Package.resolved` **纳入版本控制**(不 ignore)。理由:Cairn 是可执行 App 而非 library,Apple 官方对 app target 建议 commit `Package.resolved` 以保障多机 / CI 构建时 SwiftTerm 版本一致,避免"本机能跑远端挂"。第一次 `swift build` 产生 `Package.resolved` 后,T2 Step 8 commit 一起带上。
 
 - [ ] **Step 3:Commit**
 
@@ -287,18 +288,21 @@ swift build 2>&1 | tail -10
 - SwiftTerm 编译 warning → 属于 SwiftTerm 本身,本项目代码若无警告即可;必要时用 `-Xswiftc -suppress-warnings` 但 M0.2 不加,等 M1.x 处理
 - "no such target" → 检查 Package.swift 里 targets 数组里每个 target name 与 Sources/ 目录名一致
 
-- [ ] **Step 8:Commit**
+- [ ] **Step 8:Commit(带 Package.resolved)**
 
 ```bash
-git add Sources/
+git add Sources/ Package.resolved
 git commit -m "feat: 7 target 占位源文件,swift build 编译通过
 
 6 个库仅含 scaffoldVersion 占位常量,CairnApp 为临时 Placeholder
 (T4/T5/T6 分别替换为真实 ContentView / @main App / TerminalSurface)。
 本 commit 唯一目的:证明 Package.swift 声明的依赖图可真实链接。
+Package.resolved 纳入版本,锁定 SwiftTerm 1.13.0 的精确提交点。
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
+
+**注**:若 `Package.resolved` 不存在(例如 swift build 失败),`git add Package.resolved` 会报错。此时先确认 T2 Step 7 的 `swift build` 真正成功,再重试。
 
 ---
 
@@ -515,13 +519,25 @@ import SwiftTerm
 
 /// SwiftUI 封装的 SwiftTerm 终端视图。M0.2 只跑用户默认 shell,
 /// 不做 cwd 跟踪(OSC 7 留 M1.5)、不做 delegate 回调(留 M1.4)。
+///
+/// 关键 API 事实(SwiftTerm 1.13.0 源码核实):
+/// - `LocalProcessTerminalView: TerminalView` 其中 `TerminalView: NSView`,
+///   因此可直接作为 `NSViewRepresentable.NSViewType`
+/// - `startProcess` 完整签名:
+///   `(executable: String = "/bin/bash", args: [String] = [],
+///     environment: [String]? = nil, execName: String? = nil,
+///     currentDirectory: String? = nil)`
+/// - environment 传 nil 时 SwiftTerm 用合理默认(继承 PATH/HOME 等),
+///   无需手动构造(SwiftTerm 内部做)
+/// - execName 传 "-" + basename(shell) → shell 启动为 login shell,
+///   加载 .zprofile,与官方 TerminalApp/MacTerminal 示例一致
 public struct TerminalSurface: NSViewRepresentable {
     private let shell: String
     private let cwd: String?
 
     /// - Parameters:
     ///   - shell: 要启动的 shell 可执行路径。nil 时用 `$SHELL` 环境变量,兜底 `/bin/zsh`。
-    ///   - cwd: 起始工作目录。nil 时继承当前进程 cwd。
+    ///   - cwd: 起始工作目录。nil 时 SwiftTerm 继承父进程 cwd。
     public init(shell: String? = nil, cwd: String? = nil) {
         self.shell = shell
             ?? ProcessInfo.processInfo.environment["SHELL"]
@@ -531,23 +547,15 @@ public struct TerminalSurface: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> LocalProcessTerminalView {
         let view = LocalProcessTerminalView(frame: .zero)
-        // 继承当前进程 PATH / TERM 等环境变量;追加 Cairn 标识供后续 milestone 识别。
-        var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
-        env.append("CAIRN_TERMINAL=1")
+        // login shell idiom:`/bin/zsh` → `-zsh`,让 shell 加载 .zprofile
+        let shellIdiom = "-" + (shell as NSString).lastPathComponent
         view.startProcess(
             executable: shell,
             args: [],
-            environment: env,
-            execName: nil
+            environment: nil,       // SwiftTerm 用默认 env,M1.4 再注入 CAIRN_* 标识
+            execName: shellIdiom,
+            currentDirectory: cwd   // nil = 继承,非 nil = 精确设置,M1.5 OSC 7 修正
         )
-        if let cwd {
-            // SwiftTerm 的 startProcess 没有 cwd 参数;退而求其次:向 shell 发送 cd 命令。
-            // 这是已知 workaround,M1.5 会改为 posix_spawn 级别支持。
-            let cdCommand = "cd \(cwd.replacingOccurrences(of: " ", with: "\\ "))\n"
-            if let data = cdCommand.data(using: .utf8) {
-                view.send(data: ArraySlice(data))
-            }
-        }
         return view
     }
 
@@ -567,10 +575,11 @@ swift build 2>&1 | tail -5
 
 **可能的 warning**:SwiftTerm 1.13 若有 deprecation warning 会冒上来。忽略;它们不阻塞本项目代码。
 
-**失败排查**:
-- `Cannot find 'Terminal' in scope`:说明 SwiftTerm 符号未导入,检查 `import SwiftTerm`
-- `Type 'LocalProcessTerminalView' does not conform to 'NSViewRepresentable'`:SwiftTerm API 变动,查 https://github.com/migueldeicaza/SwiftTerm 最新 README 对应 v1.13 的 API
-- `'send' expects 'ArraySlice<UInt8>'`:不同 SwiftTerm 版本接口可能是 `Data` 或 `[UInt8]`,改成对应类型
+**失败排查**(按概率降序):
+- `Cannot find 'LocalProcessTerminalView' in scope`:缺 `import SwiftTerm`,或 Package.swift 里 CairnTerminal target 未声明 `.product(name: "SwiftTerm", package: "SwiftTerm")` 依赖
+- `LocalProcessTerminalView' does not conform to 'NSView'`:不会发生(已核实继承链 LocalProcessTerminalView → TerminalView → NSView),除非 SwiftTerm 1.14+ 变动
+- `'startProcess' has no parameter named 'currentDirectory'`:SwiftTerm 早于 1.13 的版本无该参数;确认 Package.resolved 真拉到 1.13.x 而非旧版本
+- `Extra argument 'execName' in call`:不会发生(参数存在且有默认值),除非严重 API 变动
 
 - [ ] **Step 4:Commit**
 
@@ -578,9 +587,10 @@ swift build 2>&1 | tail -5
 git add Sources/CairnTerminal/
 git commit -m "feat(terminal): TerminalSurface 封装 SwiftTerm.LocalProcessTerminalView
 
-SwiftUI NSViewRepresentable。默认启动 \$SHELL(兜底 /bin/zsh)。
-M0.2 简化:不做 cwd 精确设置(用 cd 发送)、不做 delegate 回调(M1.4)、
-不做 OSC 7 跟踪(M1.5)。注入 CAIRN_TERMINAL=1 环境变量供后续识别。
+SwiftUI NSViewRepresentable。默认启动 \$SHELL(兜底 /bin/zsh),
+用 login shell idiom (\"-zsh\")加载 .zprofile。
+M0.2 简化:不做 delegate 回调(M1.4)、不做 OSC 7 cwd 跟踪(M1.5)。
+startProcess 的 currentDirectory 参数直传 cwd,无需 cd 命令 hack。
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -845,7 +855,7 @@ pgrep -fl CairnApp || echo "[FAIL] CairnApp 进程不存在"
 
 **失败表现** + 排查:
 - 窗口没弹:`ps aux | grep CairnApp` 看进程是否活着;若死了 `open -W build/Cairn.app` 观察 exit code
-- 窗口弹了但终端全黑无 prompt:`CAIRN_TERMINAL=1 /bin/zsh` 在普通 terminal 里跑,看是否是用户 zsh 配置(比如 powerlevel10k)导致 hang
+- 窗口弹了但终端全黑无 prompt:用户 shell 启动可能卡死(powerlevel10k 初始化慢 / 网络 prompt 插件等);在普通 terminal 里跑 `/bin/zsh -l`(login shell 和 Cairn 内一致)确认是否同样慢
 - 首次启动 macOS Gatekeeper 警告 "CairnApp" 是未知开发者:本地 `swift build` 产物**不被 quarantine**,此 dialog 不应该出现;若出现说明文件可能来自网络副本,`xattr -l build/Cairn.app` 检查
 
 - [ ] **Step 6:关闭 App**
@@ -1077,10 +1087,26 @@ spec §8.3 验收要求 "用户 `open Cairn.app` 看到空窗口,里面有能输
 - `set -euo pipefail` 在 shell 脚本中使用 — 严格失败
 - `pgrep` / `pkill` / `open -W` 等 macOS 特有工具均可用(本机 Darwin 25.3.0 确认)
 
-### 6. SwiftTerm API 风险
+### 6. SwiftTerm API 已核实(2026-04-24 修订)
 
-T6 TerminalSurface 的 API 调用基于 v1.13.0 + spec §5.1 的参考代码。`Terminal.getEnvironmentVariables(termName:)`、`LocalProcessTerminalView.startProcess(executable:args:environment:execName:)`、`view.send(data: ArraySlice<UInt8>)` 这几个 API **未在执行前用真实 SwiftTerm 源码验证**。若执行时 API 不匹配,T6 Step 3 的 build 会红,排查提示已写入 Step 3 failure section。**这是 plan 里最大的不确定点**,值得执行者在 T6 多花 5-10 分钟查 SwiftTerm Docs/README。
+**Plan 初稿的 T6 基于 spec §5.1 参考代码 + 推断,包含 3 个编译错误**。用户要求自检后,通过读 SwiftTerm v1.13.0 GitHub 源码(`Sources/SwiftTerm/Mac/MacLocalTerminalView.swift` / `MacTerminalView.swift` + `TerminalApp/MacTerminal/ViewController.swift`)逐行核实并重写 T6:
+
+| 初稿错误 | 真相 | 修订 |
+|---|---|---|
+| `Terminal.getEnvironmentVariables(termName:)` | 该 API 不存在于 1.13.0 | 删除调用,`environment: nil` |
+| `view.send(data: ArraySlice<UInt8>)` | `send(source:data:)` 是 `TerminalViewDelegate` 回调,不是输入方法 | 删除 `cd` hack |
+| `cd <cwd>\n` 发送 hack | `startProcess` 真实签名有 `currentDirectory:` 参数 | `currentDirectory: cwd` 直传 |
+| `execName: nil` | 官方 sample 用 `"-" + basename(shell)` 走 login shell | 同步 |
+
+**核实依据**:
+- `LocalProcessTerminalView` 类声明(官方源码):
+  `open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDelegate`
+- `TerminalView` 类声明:`open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, TerminalDelegate`
+  → 继承链 LocalProcessTerminalView → TerminalView → NSView,NSViewRepresentable 直接兼容
+- `startProcess` 真实签名:
+  `public func startProcess(executable: String = "/bin/bash", args: [String] = [], environment: [String]? = nil, execName: String? = nil, currentDirectory: String? = nil)`
+- 官方 sample(TerminalApp/MacTerminal/ViewController.swift)对 environment 传 nil,用 execName 传 login shell idiom
 
 ### 7. 结论
 
-Plan 完整可执行,1 处风险点(T6 SwiftTerm API)已标注排查路径。用户只需 T11 跑 5 步即可验收。
+Plan 核心代码片段(Package.swift / ContentView / TerminalSurface / Info.plist / make-app-bundle.sh)全部可执行,关键 API 已对照官方源码核实。执行者按步骤走即可,无需再查 SwiftTerm 文档。唯一需要网络的步骤是首次 `swift build`(拉 SwiftTerm 源码编译,1-3 分钟)。
