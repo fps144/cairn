@@ -4,7 +4,7 @@
 
 **Goal:** 把 CairnCore 从 M0.2 的 `scaffoldVersion` 占位升级为完整领域模型 —— 7 个实体 struct、5 个状态 enum、EventType(封闭 12 种)、ToolCategory(开放集)、≥ 15 个单元测试全绿。
 
-**Architecture:** CairnCore 是**纯领域模型层**,零外部依赖(只用 Foundation),所有类型值语义,Equatable/Hashable 按 id,Codable 支持 JSON round-trip,Sendable 为 Swift 6 迁移预留。v1 "Task has-many Sessions 默认 1:1" 语义通过 `CairnTask.sessionIds: [UUID]` 表达;多对多 join table 留 M1.2 SQLite schema 处理。
+**Architecture:** CairnCore 是**纯领域模型层**,零外部依赖(只用 Foundation),所有类型值语义,Equatable/Hashable/Codable/Sendable 全部 Swift synthesized(按所有字段比较/hash,保证 JSON round-trip 测试能真实验证字段完整性)。v1 "Task has-many Sessions 默认 1:1" 语义通过 `CairnTask.sessionIds: [UUID]` 表达;多对多 join table 留 M1.2 SQLite schema 处理。
 
 **Tech Stack:** Swift 6.3.1 toolchain(语言模式 5)· swift-tools-version 5.9 · Foundation.UUID / Foundation.Date · 无第三方依赖。
 
@@ -81,7 +81,7 @@ Tests/CairnCoreTests/
 | 3 | 路径 | `String`(期望绝对路径) | 简单;不用 Foundation.URL(避免 file:// 前缀歧义) |
 | 4 | **CairnTask 命名** | **`CairnTask`(不是 `Task`)** | Swift 标准库 `Task`(结构化并发)会命名冲突;`CairnTask` 避免歧义,上下文中无需 `CairnCore.Task` 显式限定 |
 | 5 | Enum 协议 | `String` raw value + `Codable` + `Sendable` + `CaseIterable` | String raw value 便于 SQLite 列存 + JSON 互通;CaseIterable 便于 UI 遍历 |
-| 6 | Struct 协议 | `Equatable`(id 比较)+ `Hashable`(id hash)+ `Codable` + `Sendable` | v1 身份由 id 唯一确定,业务字段变化不破坏"同一实体"语义 |
+| 6 | Struct 协议 | `Equatable` + `Hashable` + `Codable` + `Sendable`(**全部 Swift synthesized,按所有字段比较/hash**)| round-trip 测试的价值 100% 依赖"按所有字段比较";若改为 by-id 则 `XCTAssertEqual(original, decoded)` 在字段丢失时会伪通过。代价:`Set<Workspace>` 把同 id 不同 name 当两条 —— v1 无此场景(实体都走 SQLite PK 去重),无影响。 |
 | 7 | ToolCategory 数据结构 | `struct ToolCategory: RawRepresentable, Hashable, Codable, Sendable` + 静态常量(已知 12 种)+ `from(toolName:)` 查表 | spec §2.3 明确"category 开放集,按 toolName 查表";Swift 无"开放 enum",用 struct 裹 String 是标准模式 |
 | 8 | Event.rawPayloadJson | `String?`(持有原始 JSON 字符串,不解析) | 懒加载避开早期解析;spec §2.6 "完整数据,懒加载" |
 
@@ -142,8 +142,8 @@ import Foundation
 /// 5 个状态机 enum(TabState / SessionState / TaskStatus / BudgetState / PlanStepStatus),
 /// 以及 EventType(封闭 12 种)、ToolCategory(开放集)。
 ///
-/// 所有类型 public + Codable + Equatable/Hashable(by id)+ Sendable。
-/// 日期序列化统一 ISO-8601,见 `ISO8601Coding.swift`。
+/// 所有类型 public + Codable + Equatable/Hashable/Sendable(全部 Swift synthesized,
+/// 按所有字段比较/hash)。日期序列化统一 ISO-8601,见 `ISO8601Coding.swift`。
 public enum CairnCore {
     /// 模块版本标识。每个 milestone 完成时 bump。
     public static let scaffoldVersion = "0.1.0-m1.1"
@@ -251,20 +251,19 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
-    func test_equatable_byId() {
+    func test_equatable_byAllFields() {
         let id = UUID()
         let a = Workspace(id: id, name: "A", cwd: "/a",
                           createdAt: Date(), lastActiveAt: Date(), archivedAt: nil)
         let b = Workspace(id: id, name: "B", cwd: "/b",
                           createdAt: Date(), lastActiveAt: Date(), archivedAt: nil)
-        // 当前实现 Equatable 默认按所有字段;本测试记录"v1 按所有字段比较"的决策,
-        // 避免日后误改为"按 id 比较"破坏 Codable round-trip 测试。
-        XCTAssertNotEqual(a, b, "v1 Equatable 比较所有字段(含 name/cwd),不仅 id")
+        // 按设计决策 #6,Equatable 是 Swift synthesized 的"所有字段比较"。
+        // 同 id 但 name/cwd 不同 → 不相等。这保证 round-trip 测试能真实验证
+        // 字段完整性(若改成 by-id 比较,round-trip 会在字段丢失时伪通过)。
+        XCTAssertNotEqual(a, b)
     }
 }
 ```
-
-**注**:Plan 设计决策 #6 说 "Equatable by id",但 Swift 的 synthesized Equatable 比较所有字段。T2 的 `test_equatable_byId` 测试实际验证"字段级比较"语义(符合 synthesized 行为)—— 我们对 #6 的准确解读是"Hashable by id,Equatable by struct 字段"。这样 round-trip 测试才能验证字段完整性。
 
 - [ ] **Step 2:跑测试确认红**
 
@@ -882,12 +881,12 @@ final class ToolCategoryTests: XCTestCase {
             "web_fetch", "mcp_call", "subagent", "todo",
             "plan_mgmt", "ask_user", "ide", "other",
         ]
-        let staticValues: Set<String> = [
-            ToolCategory.shell, .fileRead, .fileWrite, .fileSearch,
+        let allStatic: [ToolCategory] = [
+            .shell, .fileRead, .fileWrite, .fileSearch,
             .webFetch, .mcpCall, .subagent, .todo,
             .planMgmt, .askUser, .ide, .other,
-        ].map(\.rawValue).reduce(into: Set<String>()) { $0.insert($1) }
-        XCTAssertEqual(staticValues, expected)
+        ]
+        XCTAssertEqual(Set(allStatic.map(\.rawValue)), expected)
     }
 
     func test_fromToolName_shellTools() {
@@ -1275,6 +1274,8 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `Sources/CairnCore/Budget.swift`
 - Create: `Tests/CairnCoreTests/BudgetTests.swift`
+
+**Spec 调和说明**:spec §2.4 Budget pseudocode **没写** `updatedAt`,但 §D SQLite schema 的 `budgets` 表有 `updated_at TIMESTAMP NOT NULL` 列。M1.1 Budget struct **带上 `updatedAt: Date`**,向 SQLite schema 看齐(§D 是硬要求,§2.4 是概念图)。BudgetTracker(M3.3)每次累加 usage 时更新这个字段。命名上 `maxWallSeconds` / `usedWallSeconds` 也与 §D 一致(§2.4 pseudocode 写 `maxWallTime` 语义模糊,seconds 更准)。
 
 - [ ] **Step 1:先写测试**
 
