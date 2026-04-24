@@ -7,7 +7,9 @@
 | 状态 | Draft(等待用户审阅) |
 | 作者 | Claude (Opus 4.7) + sorain |
 | 许可 | MIT(项目本身)|
-| 目标交付 | Cairn v1.0(约 11 个月活跃开发,业余时间约 20-22 个月日历时间) |
+| 目标交付 | Cairn v1.0(Claude 主导开发,预计 5-8 个月日历时间,取决于用户验收 session 频率) |
+| 定位 | **生产级开源项目**(非学习项目)· 永不签名分发(xattr 路线) |
+| 开发模式 | **Claude 全权主导开发,用户仅做产品决策 + milestone 验收** |
 
 ---
 
@@ -79,12 +81,39 @@ Cairn **不修改** Claude Code 的任何数据文件,采用**观察者**模式(
 - 插件系统
 - 自动更新(v1.1 集成 Sparkle)
 
-### 1.6 成功判据
+### 1.6 成功判据(生产级开源项目标准)
 
-- 可在 macOS 14+ 稳定运行,不崩
-- 作者本人能每日工作替代 iTerm2
-- 从 v0.1 到 v1.0 积累 ≥ 300 stars,≥ 30 真实活跃用户
-- 作者 Swift + macOS 原生 + AI 工具链集成能力从入门升至中级
+**产品侧**:
+
+- macOS 14+ 稳定运行,空闲 CPU < 1%
+- 用户本人可每日用它替代 iTerm2 / Warp
+- v1.0 首月积累 ≥ 500 GitHub stars,≥ 100 真实活跃用户
+- HN / Product Hunt 首发周内进入当天前 20 条
+
+**代码侧**:
+
+- 无 Xcode 编译警告 + SwiftLint 基础规则通过
+- 核心模块(CairnCore / CairnClaude)单测覆盖率 ≥ 70%
+- 关键路径(JSONL ingest / 终端 IO / DB 迁移)有集成测试
+- 关键用户流程有 XCTest UI 自动化测试
+- 所有用户字符串经 `String(localized:)`,中英双语交付
+- 可访问性:按钮 `accessibilityLabel`,对比度 ≥ 4.5:1,VoiceOver 可导航
+- GitHub Actions CI 绿(lint + test + build)
+
+**文档侧**:
+
+- README(中英)含安装、首次使用、xattr 说明
+- `docs/user-guide/`(用户文档)
+- `docs/development/`(开发者 setup + 架构说明)
+- `CONTRIBUTING.md`(贡献者指南)
+- `CHANGELOG.md`(Keep-a-Changelog 格式)
+- Spec 和 Plans 归档可追溯
+
+**分发侧**:
+
+- v0.1 Beta 起:**未签名 DMG**(xattr 路线,**永不购买 Apple Developer 账号**)
+- Homebrew Cask 可用
+- Sparkle 自动更新(v1.1 再加)
 
 ---
 
@@ -940,255 +969,415 @@ Keychain:v1 不存 secret,不用 Keychain。
 
 ---
 
-## 8. 路线图与里程碑
+## 8. 路线图与里程碑(Session-based 模型)
 
-### 8.1 三次发布
+### 8.1 发布节奏与节拍模型
+
+**三次发布**:
 
 ```
-v0.1 Beta       v0.5            v1.0
-Observable      Task Layer      Polish + 公证
-Terminal        
-~6 月活跃        ~9 月           ~11 月活跃
-~12 月日历       ~18 月           ~22 月日历(业余 ~50% 效率)
+v0.1 Beta           v0.5                v1.0
+Observable          Task Layer          Production + Polish
+Terminal            
+~8 milestones       ~14 milestones      ~24 milestones
 ```
 
-(活跃开发 = 真正写代码的工作周对应的时长。业余时间项目按 50% 效率估算日历时间。)
+**核心节拍模型**:**Claude 主导开发,用户只做 milestone 验收**。计划按"milestone 数"而非"周数"组织。
 
-### 8.2 四阶段
+- 每个 milestone ≈ Claude 1-3 次 session 能完成的功能单元
+- 每个 milestone 结尾 Claude 停下产出验收清单,等用户跑一遍反馈
+- 日历时间 = milestone 数 × 用户 session 频率
 
-| 阶段 | 活跃周 | 产出 | 发布 |
+| 用户 session 频率 | v0.1 Beta(8 M) | v0.5(14 M) | v1.0(24 M) |
 |---|---|---|---|
-| Phase 0 · 探路 | 2w | 环境 + JSONL 勘察 | — |
-| Phase 1 · 终端基座 | 10w | 原生终端 + Tab/分屏 | — |
-| Phase 2 · Claude 观察 | 12w | JSONL → Timeline | **v0.1 Beta** |
-| Phase 3 · Task 层 | 12w | Task/Budget/Plan 完整 | **v0.5** |
-| Phase 4 · 发布 | 8w | 公证 + Homebrew + 文档 | **v1.0** |
-| **总** | **44w** | | |
+| 每周 1 session | ~2 个月 | ~3.5 个月 | ~6 个月 |
+| 每周 2 session | ~1 个月 | ~1.75 个月 | ~3 个月 |
+| 每周 3+ session | ~3 周 | ~1.5 个月 | ~2 个月 |
 
-### 8.3 Phase 0:探路(2 周)
+**合理预期**:用户每周 1-2 session → **v1.0 约 4-6 个月日历**。
 
-#### M0.1(W1):开发环境 + JSONL 勘察
+### 8.2 Milestone 全景(24 个)
 
-| 任务 | 产出 |
-|---|---|
-| Xcode 安装 + 命令行工具 | `xcodebuild -version` 正常 |
-| GitHub repo `cairn` + MIT LICENSE | 初始 commit |
-| 用户跑 3-5 个真实 Claude 会话 | `~/.claude/projects/` 有内容 |
-| probe 脚本 | `probe-report.md` |
-| 对比 Section 4 映射表 | 差异清单 |
+```
+Phase 0 · 探路(2 milestone)
+  ├─ M0.1  仓库基础设施 + Probe 勘察
+  └─ M0.2  Hello World macOS App
 
-probe 脚本产出:
-- 真实 `system.cwd` 字段位置
-- `usage` 精确 schema
-- 未预料的 entry type
-- JSONL 大小分布
+Phase 1 · 终端基座(5 milestone)
+  ├─ M1.1  SPM 6 模块骨架 + CairnCore 数据类型
+  ├─ M1.2  CairnStorage(GRDB + 11 表 + migrator)
+  ├─ M1.3  主窗口三区 + 侧边栏/Panel 结构
+  ├─ M1.4  单 Tab 终端 + PTY 生命周期
+  └─ M1.5  多 Tab + 水平分屏 + OSC 7 + 布局持久化
 
-#### M0.2(W2):Hello World
+Phase 2 · Claude 观察(7 milestone)── v0.1 Beta
+  ├─ M2.1  JSONLWatcher(FSEvents + vnode + reconcile)
+  ├─ M2.2  JSONLParser + 12 Event 映射 + 配对
+  ├─ M2.3  EventIngestor + 批量事务
+  ├─ M2.4  AsyncStream EventBus + Timeline 视图
+  ├─ M2.5  工具卡片合并 + 视觉语言实现
+  ├─ M2.6  Session 生命周期 + Tab↔Session 关联
+  └─ M2.7  v0.1 Beta 打磨 + 未签名 DMG 打包 + 发布
 
-| 任务 | 产出 |
-|---|---|
-| `Package.swift` 最小化 | `swift build` 成功 |
-| 最小 SwiftUI App | 空窗口 |
-| SwiftTerm 嵌入跑 zsh | echo 回显 |
-| `.gitignore` | git status 干净 |
+Phase 3 · Task 层(6 milestone)── v0.5
+  ├─ M3.1  Task 实体 + 自动创建 + Sidebar
+  ├─ M3.2  Task 详情 Panel + 状态机
+  ├─ M3.3  BudgetTracker + 预算 UI + 告警
+  ├─ M3.4  Plan 双源同步(TodoWrite + plan.md)
+  ├─ M3.5  Workspace 管理 + 多 Workspace 隔离
+  └─ M3.6  历史导入 + v0.5 发布
 
-### 8.4 Phase 1:终端基座(10w)
+Phase 4 · 生产级化(4 milestone)── v1.0
+  ├─ M4.1  设置页 + 本地化基础设施 + 中英双语交付
+  ├─ M4.2  可访问性(VoiceOver / 对比度 / 键盘导航)
+  ├─ M4.3  CI + 诊断导出 + 周自动备份
+  └─ M4.4  完整文档(user / dev / contributing) + v1.0 发布
+```
 
-| M | W | 内容 | 产物 |
+### 8.3 Phase 0:探路(2 milestone)
+
+#### M0.1:仓库基础设施 + Probe 勘察
+
+**交付物**:
+- LICENSE / README / .gitignore
+- GitHub 远端 + 首次 push
+- `probe/probe.py`(Python 扫描脚本)+ 单测
+- `probe/probe-report.md`(勘察报告)
+- `docs/decisions/0001-probe-findings.md`(ADR)
+- 必要时修订 spec §4
+
+**用户负责**:生成真实数据(用 Claude Code 跑 3+ 会话);验收跑 probe.py 看 report;GitHub push 授权。
+
+**Claude 负责**:其余所有。
+
+#### M0.2:Hello World macOS App
+
+**交付物**:
+- `Package.swift`(6 target 骨架)
+- 最小可启动的 macOS SwiftUI App
+- SwiftTerm 嵌入运行 zsh
+- XCTest 测试目标建好
+
+**验收**:用户 `open Cairn.app` 看到空窗口,里面有能输入的 zsh 终端。
+
+### 8.4 Phase 1:终端基座(5 milestone)
+
+| M | 内容 | 交付物 | 验收 |
 |---|---|---|---|
-| M1.1 | 3-4 | 6 模块骨架 + CairnCore 类型 + 10 单测 | 编译通过 |
-| M1.2 | 5-6 | CairnStorage + GRDB + 11 表 + migrator | schema_versions v1 写入 |
-| M1.3 | 7-8 | 主窗口三区 + 侧边栏/Panel 可折叠 | Section 6 壳子 |
-| M1.4 | 9-10 | 多 Tab + TerminalSurface + PTY | ⌘T/⌘W/⌘L 可用 |
-| M1.5 | 11-12 | 水平分屏 + OSC 7 + 布局持久化 | 重启布局完整 |
+| M1.1 | SPM 6 模块骨架 + CairnCore 数据类型 | 编译通过;≥ 10 单测绿 | `swift test` 全绿 |
+| M1.2 | CairnStorage:GRDB + 11 表 + migrator + DAO | `schema_versions` 插入 v1;完整 CRUD 单测 | 单测全绿 |
+| M1.3 | SwiftUI 主窗口三区 + Sidebar/Panel 可折叠 | 启动看到 Section 6 布局 | 手动验收,布局像设计图 |
+| M1.4 | 多 Tab 管理 + TerminalSurface 封装 + PTY 生命周期 | `⌘T` / `⌘W` / `⌘L` 可用 | 手动创建/切换/关闭 Tab 工作 |
+| M1.5 | 水平分屏 + OSC 7 cwd 跟踪 + 布局 SQLite 持久化 | 关 App 开 App 布局恢复 + cd 自动更新 cwd | 手动验收 |
 
-Phase 1 验收:能替代 iTerm2 日常用的原生终端(无 AI 集成)。
+**Phase 1 验收终点**:可替代 iTerm2 日常使用的原生终端(尚无 AI 集成)。
 
-### 8.5 Phase 2:Claude 观察(12w)→ v0.1 Beta
+### 8.5 Phase 2:Claude 观察(7 milestone)→ **v0.1 Beta 发布**
 
-| M | W | 内容 |
+| M | 内容 | 关键验证 |
 |---|---|---|
-| M2.1 | 13-14 | JSONLWatcher 三层 |
-| M2.2 | 15-16 | JSONLParser 11 种映射 + tool pairing + 10 fixture |
-| M2.3 | 17-18 | EventIngestor 批量事务 + cursor 推进 |
-| M2.4 | 19-20 | AsyncStream EventBus + 基础 Timeline |
-| M2.5 | 21-22 | 工具卡片合并 + 视觉语言实现 |
-| M2.6 | 23-24 | Session 生命周期 + Tab↔Session 关联 + Beta 打磨 |
+| M2.1 | JSONLWatcher:FSEvents + vnode + 30s reconcile 三层 | 单测 + 用真实 JSONL 触发验证 |
+| M2.2 | JSONLParser:12 Event 映射 + tool_use↔result 配对 + 10 fixture | fixture 测试全绿 + 真实 session 解析 |
+| M2.3 | EventIngestor:批量事务写 SQLite + cursor 推进 | 压力测试:1000 行 < 500ms |
+| M2.4 | AsyncStream EventBus + Timeline View 基础 | 边跑 Claude 边看 Panel 刷新 |
+| M2.5 | 工具卡片合并 + 视觉语言(Section 6.4)+ 折叠交互 | UI 自动化测试 + 手动截图对齐 |
+| M2.6 | Session 生命周期检测 + Tab↔Session 关联 | 多种场景:正常结束/意外崩/idle |
+| M2.7 | v0.1 Beta 打磨 + 未签名 DMG 脚本 + 发布 | Release + 首发 HN/X/Claude Discord |
 
-v0.1 Beta 首发:GitHub Release 未公证 DMG;README 教 `xattr`;HN + X + Claude Discord;目标 2 周 100 stars + 20 用户 + 10 issues。
+**v0.1 Beta 发布说明**(Claude 写 CHANGELOG + release notes):
+- 定位:Observable Terminal —— 把 Claude Code 的输出结构化呈现
+- 不含:Task 概念 / Budget / Plan / 历史导入(v0.5 再加)
+- 分发:未签名 DMG,README 首页写 `xattr` 命令
+- 目标:首发 2 周 ≥ 200 stars + ≥ 40 真实用户 + ≥ 20 issues
 
-v0.1 明确不含:Task 概念、Budget、Plan、历史导入。卖点:"能把 Claude Code 输出结构化呈现的终端"。
+### 8.6 Phase 3:Task 层(6 milestone)→ **v0.5 发布**
 
-### 8.6 Phase 3:Task 层(12w)→ v0.5
-
-| M | W | 内容 |
-|---|---|---|
-| M3.1 | 25-26 | Task 实体 + Session 自动建 Task + sidebar |
-| M3.2 | 27-28 | Task 详情 Panel + 状态机 + 用户操作 |
-| M3.3 | 29-30 | BudgetTracker + 预算 UI + 告警 |
-| M3.4 | 31-32 | Plan 从 TodoWrite + plan.md 双源 + Panel |
-| M3.5 | 33-34 | Workspace 管理 + 多 Workspace 隔离 |
-| M3.6 | 35-36 | 历史导入 + v0.5 发布 |
-
-v0.5 目标:500 stars, 100 活跃用户, 5-10 外部贡献者。
-
-### 8.7 Phase 4:抛光(8w)→ v1.0
-
-| M | W | 内容 |
-|---|---|---|
-| M4.1 | 37-38 | 设置页 + 遥测开关 + 本地化 |
-| M4.2 | 39-40 | 诊断导出 + 周备份 + CI |
-| M4.3 | 41-42 | 代码签名 + Notarization + Sparkle(**需决定 $99/年**) |
-| M4.4 | 43-44 | Homebrew Cask + 官网 + 文档 + v1.0 |
-
-### 8.8 分工
-
-| Claude | sorain |
+| M | 内容 |
 |---|---|
-| M 开始时出详细 TODO + 验收标准 | 读设计 + 提问 |
-| 写核心骨架 + 难点(并发、FSEvents、Parser) | 写增量/样板代码 |
-| Code review(PR 审阅) | 运行、测试、观察 bug |
-| 架构级技术文档 | 用户文档(README、安装) |
-| 疑难杂症(SwiftTerm 崩、SQLite 锁) | 业务逻辑(UI 细节) |
+| M3.1 | Task 实体 + 自动从 Session 创建 + Sidebar Task 列表(Section 6.2) |
+| M3.2 | Task 详情 Panel(右上区) + 状态机 + 用户操作(归档/重命名/合并) |
+| M3.3 | BudgetTracker:api_usage 聚合 → Budget.state + 80%/100% 告警 |
+| M3.4 | Plan 双源同步:TodoWrite 解析 + plan.md 监听 + Panel 渲染 |
+| M3.5 | Workspace 管理:创建/切换/归档 + 多 Workspace 布局隔离 |
+| M3.6 | 历史 JSONL 导入(首次启动扫描)+ v0.5 发布 |
 
-### 8.9 外部成本
+**v0.5 发布目标**:完整核心功能,**≥ 500 stars,≥ 100 活跃用户**。Claude 出 CHANGELOG + 升级指南。
 
-| 项 | 必要 | 成本 | 时机 |
+### 8.7 Phase 4:生产级化(4 milestone)→ **v1.0**
+
+| M | 内容 | 交付清单 |
+|---|---|---|
+| M4.1 | 设置页 UI + 本地化基础设施 + 中英双语**所有字符串** | `Localizable.xcstrings` 完整;语言切换即时生效 |
+| M4.2 | 可访问性:VoiceOver 全链路导航 + 对比度审查 + 键盘导航完整 | XCTest 可访问性测试 + 手动 VoiceOver 跑一遍 |
+| M4.3 | GitHub Actions CI(lint + test + build)+ 诊断导出 + 周自动备份 | CI 绿;诊断 zip 可导出;备份脚本每周跑 |
+| M4.4 | 完整文档 + Homebrew Cask + Sparkle 更新 + v1.0 发布 | 见下 |
+
+**M4.4 完整文档清单**:
+- `README.md`(中英)
+- `docs/user-guide/`(用户文档)
+- `docs/development/setup.md`(开发环境)
+- `docs/development/architecture.md`(架构说明)
+- `CONTRIBUTING.md`
+- `CHANGELOG.md`(Keep-a-Changelog 格式)
+- 官网(GitHub Pages,简洁介绍 + 截图 + 下载)
+
+**v1.0 发布目标**:**≥ 1500 stars,≥ 500 活跃用户,≥ 3 外部贡献者**。
+
+### 8.8 分工(Claude 主导模式)
+
+| Claude 负责 | 用户负责 |
+|---|---|
+| 读 spec + plan,自主判断当前进度 | 触发 session(说"继续"或具体需求) |
+| 写所有代码(Swift / Python / Shell) | 产品方向决策(加减功能) |
+| 写所有测试 | 花钱决策(当前政策:零花费) |
+| 写所有架构文档 + 用户文档 | 品牌决策(文案、logo、配色) |
+| commit + push + 打 tag | 验收(跑命令、核对输出) |
+| milestone 完成时输出验收清单 | 接受或拒绝验收,反馈问题 |
+| 维护 CHANGELOG / release notes | 发布时机决定 |
+
+### 8.9 外部成本(零花费路线)
+
+| 项 | 是否必要 | 成本 | 备注 |
 |---|---|---|---|
-| Xcode | ✅ | $0 | 现在 |
-| GitHub 免费 | ✅ | $0 | M0.1 |
-| 免费 Apple ID | ✅ | $0 | M0.2 |
-| **Apple Developer** | **❌ 非必需** | $99/年 | v0.5 后按需 |
-| 域名 | 🟡 | $10-100/年 | v0.5 前 |
-| Homebrew Tap | ✅ | $0 | M4.4 |
-| GitHub Actions CI | ✅ | $0(公开 repo) | M4.2 |
+| Xcode | ✅ 必须 | $0 | 用户本机 |
+| GitHub 免费账号 | ✅ 必须 | $0 | 公开 repo 可用 |
+| 免费 Apple ID(Xcode 登录) | ✅ 必须 | $0 | 本地构建用 |
+| **Apple Developer** | ❌ **决定不买** | $99/年 | 永不签名,xattr 路线 |
+| **域名** | ❌ **不买** | $10-100/年 | 用 `cairn.github.io` / GitHub Pages 就够 |
+| Homebrew Tap | ✅ 必须 | $0 | 独立 GitHub repo `homebrew-cairn` |
+| GitHub Actions CI | ✅ 必须 | $0 | 公开 repo 免费 |
+| Sentry/PostHog 遥测 | ❌ **不加** | — | 隐私优先,零遥测 |
 
-**Apple Developer 决策逻辑**:
-- v0.1 Beta:路径 A(未签名 + xattr 指南),$0
-- v0.5:根据用户反馈决定是否升级为路径 C(Developer ID + Notarization)
+**总成本:$0/年。** 这也是"零门槛参与的真开源"的一部分。
 
-### 8.10 风险清单
+### 8.10 风险清单(更新版)
 
 | 风险 | 概率 | 应对 |
 |---|---|---|
-| JSONL schema 变化 | 中 | probe + fixture + 兼容矩阵 |
-| 用户时间断档 | 高 | v0.1 Beta 6 个月可达,止损点清晰 |
-| SwiftTerm 致命 bug | 低 | 分层设计,可切 libghostty |
+| JSONL schema 变化(Claude 升级) | 中 | Probe + fixture 覆盖矩阵;Parser 版本兼容 |
+| Claude 误判当前 milestone 状态 | 中 | CLAUDE.md 强制开工前核对 `git log` + `milestone-log` |
+| 未签名导致采纳率低(xattr 摩擦) | 高 | README 首页显著提示 + 可选 Homebrew 自动化 |
+| SwiftTerm 致命 bug | 低 | 分层设计,v2 可切 libghostty,TerminalSurface 一层封装 |
 | SQLite 大数据量性能 | 低 | 归档 + 索引 + 分页 |
-| 被 cmux/codux 抄设计 | 中 | 差异化靠执行 + 社区,不藏 |
-| macOS 新版破坏 API | 中 | 每 M 在最新 Xcode beta 跑 |
+| 被 cmux / codux 抄设计 | 中 | 差异化靠 Task 抽象执行质量 + 社区,设计不藏 |
+| macOS 新版(2026+)破坏 API | 中 | CI 用最新 Xcode 和 beta |
+| 质量标准降格风险 | **中高** | CLAUDE.md 明列生产级基准;每 M 自查对齐 |
+| Session 间 Claude 读错进度 | 中 | CLAUDE.md 强制开工核对协议 + 一句话报告后等用户 ✅ |
 
 ---
 
-## 9. 协作方式与学习节奏
+## 9. 协作方式与验收协议(Claude 主导模式)
 
-### 9.1 Milestone 协作节奏
+### 9.1 Session 循环(标准流程)
 
-**Day 1**:Claude 出 TODO 清单 + 骨架代码 + 列"本 M 学的概念 1-3 个"。用户读 PR,提问,本地跑。
+每次用户触发一个 Claude Code session,Claude 按此流程执行:
 
-**Day 2-13**:用户按 TODO 实现,每 TODO 一 commit,每天 push。卡 > 30min 立刻问。Claude 每次 push 做 review(分"必改/建议/吐槽")。
+```
+1. 读 CLAUDE.md + spec + 最新 plan(docs/superpowers/plans/ 下最新文件)
+2. 跑:git log --oneline -10  git status  cat docs/milestone-log.md | tail
+3. 一句话对用户报告:"我看到的状态是 X,准备做 MY,开始?"
+4. 等用户 ✅
+5. 执行 milestone(代码 + 测试 + 文档 + commit + push)
+6. 产出验收清单(验收命令 + 期望输出 + 已知限制)
+7. 更新 docs/milestone-log.md
+8. 告知用户"MY 完成,等验收"
+9. 停下
+```
 
-**Day 14**:一起 Demo,验收,写 retro,更新 `learning-log.md`,merge + tag。
+**绝对不要**:
+- 一个 session 推进多个 milestone(积压用户验收)
+- 不验收就继续下一步
+- 跑掉不回报
 
-### 9.2 Git 工作流
+### 9.2 用户验收协议
+
+用户只需做 3 件事:
+
+1. **粘贴命令跑一遍**(Claude 产出的验收命令)
+2. **核对输出是否符合期望**
+3. **回复**:
+   - ✅ 通过 → 下个 session 推进下个 M
+   - ❌ 不通过 + 具体描述问题 → 下个 session Claude 修
+
+**用户不必做**:
+- 读代码(除非自己想)
+- 理解架构(信任 spec 就够)
+- 调试(把现象给 Claude,Claude 查)
+- 写文档 / 提交代码
+
+### 9.3 验收清单模板(Claude 每个 milestone 结尾输出)
+
+```markdown
+## M[X.Y] 验收清单
+
+**交付物:**
+- [列出本 milestone 创建/修改的关键文件]
+
+**前置条件:**
+- [如需,例如"已装 Xcode 16+"]
+
+**验证步骤:**
+
+步骤 1 · 构建
+```bash
+cd /Users/sorain/xiaomi_projects/AICoding/cairn
+swift build
+```
+期望: Build complete! 无 warnings。
+
+步骤 2 · 单元测试
+```bash
+swift test
+```
+期望: N passed, 0 failed。
+
+步骤 3 · (可选)手动运行验证
+```bash
+open build/... / xcrun ...
+```
+期望: [具体用户可观察的行为]
+
+**已知限制 / 延后项:**
+- [清单,无则写"无"]
+
+**下个 M:** M[X.Y+1] [标题]
+```
+
+### 9.4 Git 工作流(Claude 主导)
 
 - `main` 永远 green
-- feature 分支 `feature/mX-Y-topic`
-- 每个 TODO 一个小 commit
-- 完成后 PR → main
-- 不 `git push --force` 到 main
+- 直接在 main 上小步推进(小项目无需 PR 流程,Claude 单向写入)
+- 每个逻辑变更一个 commit
+- Milestone 完成后打 tag `mX-Y-done`
+- 依赖变更**独立 commit** 且在 message 中高亮
+- **绝不** `git push --force` 到 main
+- **绝不** 使用 `--no-verify`
 
-Commit 规范:一行摘要 ≤ 50 字,正文描述**为什么**。
+Commit 信息格式:
+```
+<type>: <一行摘要(≤ 60 字)>
 
-三条铁律:
-1. `main` 永远能编译 + 单测绿,坏了立刻 revert
-2. 依赖变更必须独立 commit 且 PR 高亮
-3. 依赖变更需事前批准
+<可选正文:解释"为什么"这样做,不解释"做了什么">
 
-### 9.3 代码风格(以教为目的)
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+```
 
-- 函数短(目标 ≤ 30 行)
-- 命名长而直白
-- 注释只写"为什么"
-- 每个新概念只引入一次
-- 错误信息要有内容
-- **严禁 Phase 1 就搞协议接口 + 工厂模式**(YAGNI 写进 CONTRIBUTING.md)
+常见 type:`feat / fix / refactor / test / docs / chore / ci / build`。
 
-### 9.4 用户参与要求
+### 9.5 代码质量标准(生产级,不降格)
 
-必做:
-- 每个 PR 至少读 3 遍
-- 敢于质疑
-- 自己跑起来
-- 每 M 更新 `docs/learning-log.md`
+这是**硬基准**,每个 milestone 完成时 Claude 自查:
 
-禁止:
-- 不问就合并看不懂的代码
-- 沉默消失 3 周
-- 绕过设计决策私自加东西
-
-### 9.5 学习路径
-
-**Phase 0-1**:Swift 官方 Language Guide 1-10 章 + SwiftUI Tutorial Essentials + Paul Hudson Hacking with Swift(查漏补缺)
-
-**Phase 2**:WWDC Meet async/await + Swift Concurrency 官方 + GRDB README
-
-**Phase 3-4**:WWDC 2024/2025 SwiftUI 按需 + Notarization 文档(M4.3 前)
-
-不推荐:先学后做的教程模式;付费课程;iOS 教程(macOS 不同)。
-
-### 9.6 何时问 / 何时做
-
-| 情况 | 动作 |
+| 维度 | 要求 |
 |---|---|
-| 不懂语法 | 查文档 5 分钟,解决不了问 |
-| 不懂设计 | 立刻问 |
-| 卡 > 30 分钟 | 停下问 |
-| 加新依赖 | 必须先问 |
-| 改架构 | 必须先问 |
-| 遇到违反设计的需求 | 开 issue 讨论 |
-| bug 能复现 | 尝试自修 → PR → review |
-| bug 不能复现 | 记 `docs/bugs/` |
+| 编译 | Xcode + SwiftLint 基础规则无警告 |
+| 单元测试 | 核心模块 ≥ 70% 覆盖(CairnCore / CairnClaude 重点) |
+| 集成测试 | 关键路径(JSONL / PTY / DB 迁移)有场景级用例 |
+| UI 测试 | 关键用户流程(⌘T / Task 切换 / Hook 审批)XCTest UI 自动化 |
+| 本地化 | 所有字符串 `String(localized:)` + `Localizable.xcstrings` |
+| 可访问性 | `accessibilityLabel` 齐 + 对比度 ≥ 4.5:1 + VoiceOver 可用 |
+| 函数 | 单函数 ≤ 30 行(目标值,不是硬限制) |
+| 命名 | 长而直白(`ingestJSONLLinesAndEmitEvents` 好于 `process`) |
+| 注释 | 只写"为什么",不写"做什么" |
+| 错误 | 用户可见错误有可读消息;不可恢复错误生成诊断包 |
+| 性能 | 空闲 CPU < 1%;Timeline 1000 条 < 16ms 帧 |
+| YAGNI | 严禁"为未来灵活性"提前抽象 |
 
-### 9.7 docs 结构
+### 9.6 Claude 必须先问用户的事
+
+| 情况 | 为什么必须问 |
+|---|---|
+| 想加 spec 之外的新功能 | 越权,产品方向 |
+| 想砍 spec 已有的功能 | 同上 |
+| 想引入新第三方依赖(≠ spec §3.6) | 增加维护面 |
+| 遇到 spec 内部矛盾 | 设计分歧 |
+| 想做破坏性变更(force push / 删 commit) | 不可逆 |
+| 环境异常(用户机器配置问题) | Claude 改不了 |
+| 多种技术方案等价,但用户有偏好 | 给选项 |
+| 测试反复失败,怀疑是设计 bug 而非实现 bug | 需要重新对齐 |
+
+**模板**:
+> "我遇到 X。原因是 Y。选项 A(代价 A)/ 选项 B(代价 B)。建议 A。等你决定。"
+
+**不要**在这些情况下硬闯。硬闯 = 浪费 session + 埋坑。
+
+### 9.7 Claude 不需要问的事(自决)
+
+- 依赖版本选择(同 major 内)
+- 代码风格细节(命名、注释、错误处理)
+- 内部文件组织 / 模块拆分
+- 测试类型与数量(只要满足 §9.5 基准)
+- 性能优化策略
+- commit 粒度 / message 格式
+- CI 配置细节
+- 日志格式
+
+### 9.8 文档结构(生产级版本)
 
 ```
-docs/
-├── superpowers/
-│   ├── specs/           设计文档(本文件)
-│   └── plans/           实施计划(writing-plans 产出)
-├── architecture.md      活文档,随开发更新
-├── api-contracts.md     内部协议契约
-├── learning-log.md      用户学习日志(按周)
-├── bugs/                无法立即修的 bug
-├── decisions/           ADR 风格重要决策记录
-└── CONTRIBUTING.md      v0.5 开源前写
+cairn/
+├── README.md                      用户入口,中英双语
+├── CHANGELOG.md                   Keep-a-Changelog 格式(v0.1 起)
+├── CONTRIBUTING.md                贡献指南(v0.5 前写)
+├── LICENSE                        MIT
+├── CLAUDE.md                      Claude session 开工文件
+└── docs/
+    ├── superpowers/
+    │   ├── specs/                 设计规范
+    │   └── plans/                 milestone 计划
+    ├── user-guide/                用户文档(v0.5 起补)
+    │   ├── installation.md
+    │   ├── first-run.md
+    │   └── features/              按功能分篇
+    ├── development/
+    │   ├── setup.md               开发环境搭建
+    │   ├── architecture.md        活文档,随开发更新
+    │   └── api-contracts.md       内部协议契约
+    ├── decisions/                 ADR 风格决策记录
+    │   └── 0001-probe-findings.md
+    ├── milestone-log.md           milestone 完成记录(每 M 更新)
+    └── bugs/                      无法即修的 bug 记录
 ```
 
-### 9.8 项目健康度信号
+注意:把 `learning-log.md` 删除 / 改名为 `milestone-log.md`,反映定位调整。
 
-| 灯 | 条件 | 动作 |
+### 9.9 项目健康度信号(Claude 自律)
+
+| 灯 | 条件 | Claude 应对 |
 |---|---|---|
-| 🟢 | 每周 ≥ 1 commit + M 按时 + main 绿 + log 更新 | 继续 |
-| 🟡 | 2 周无 push / M 超时 50% / log 3 周未更新 | Claude 主动问,retro,砍范围 |
-| 🔴 | 4 周无 push 且不回应 / main 崩 3 天 | 项目转保留状态 |
+| 🟢 | 上个 milestone 通过验收;main 绿;文档同步 | 继续推进 |
+| 🟡 | 上个 milestone 验收发现小问题 | 下个 session 先修再推进 |
+| 🔴 | main 构建失败 / 测试多条失败 / 关键功能退化 | **立刻停下,不推进新功能**;下个 session 专注修复 |
 
-### 9.9 动摇时的应对
+Claude 发现 🔴 情况时,主动在 session 结尾告诉用户:
+> "当前状态 🔴:XX 坏了。下个 session 我会先修这个,不做新 milestone,除非你说可以跳过。"
 
-| 情况 | 应对 |
-|---|---|
-| 太忙继续不下去 | 一起砍范围。v0.1 Beta 就停也有价值 |
-| 失去信心 | Retro,方向错?暂时疲劳?必要时 pivot |
-| 有人要加入 | v0.5 前单人推,之后纳入 |
-| Claude 帮不动了 | 设计层已覆盖难点,真出现停下重设计 |
+### 9.10 Claude 的承诺(生产级版本)
 
-### 9.10 Claude 的承诺
+1. **不替用户做产品决策**(功能、文案、花钱、发布时机)
+2. **坦白不知道的事**(需要查证就明说"让我先验证")
+3. **不糊弄性产出**:代码必须跑过、测过、自查过质量基准
+4. **设计错会承认并重修**(不硬撑错误设计)
+5. **不积压工作**:每个 milestone 完结 → 停 → 等验收 → 再推
+6. **不降低质量基准**(测试 / 文档 / 可访问性)
+7. **不引入未在 spec 的依赖 / 功能** 不先问用户
+8. **main 永远可用**:红灯立刻停,不推新功能
+9. **验收清单必须完整**:命令 + 期望 + 限制清清楚楚
 
-1. 不替用户决策,给选项 + 建议
-2. 坦白不知道的事,先验证再答
-3. 不糊弄性产出代码
-4. 设计错会承认并重来
-5. 不让项目陷入"我写你不懂"
+### 9.11 session 之间的连续性保证
+
+由于 Claude 每个 session 是全新上下文,**一致性靠文档保证**:
+
+| 信息 | 存储位置 | 用途 |
+|---|---|---|
+| 工作模式和红线 | `CLAUDE.md` | 每次开工必读 |
+| 设计决策 | spec | 唯一真相源 |
+| 当前 milestone | 最新 `plans/` 文件 | 本周做什么 |
+| 已完成 milestone | `docs/milestone-log.md` | 进度判断 |
+| 架构演进 | `docs/development/architecture.md` | 活文档 |
+| 决策变更 | `docs/decisions/NNNN-*.md` | ADR 审计 |
+
+**Claude 的自律**:改了架构/决策就**同步更新文档**,不留隔代漂移。
 
 ---
 
@@ -1196,7 +1385,7 @@ docs/
 
 | # | 决策 | 选择 | 关键理由 |
 |---|---|---|---|
-| A1 | 终端引擎 | SwiftTerm(非 libghostty) | 纯 Swift,learner 友好,v1.5 可切换 |
+| A1 | 终端引擎 | SwiftTerm(非 libghostty) | 纯 Swift(无 C 桥接维护成本)+ Codux 已验证 + v1.5 可切换到 libghostty 若需 GPU 性能 |
 | A2 | 构建系统 | SPM 多模块(非单 target) | 编译器强制分层,教学价值 |
 | A3 | Session vs Task | Task has-many Sessions(v1 默认 1:1) | 语义正确,schema 向前兼容 |
 | A4 | AI 集成通路 | JSONL 主 + Hook 可选 + MCP 不做 | 零侵入,稳定性可控 |
@@ -1204,10 +1393,16 @@ docs/
 | A6 | 许可证 | MIT | 最大化采纳,open-core 路径畅通 |
 | A7 | Budget 强制 | v1 观察,v1.1 Hook 强制 | 不 patch Claude,零侵入 |
 | A8 | 游戏化 | 不做(宠物/等级) | 专业工具,Codux 前车之鉴 |
-| A9 | Apple Developer | v0.5 后按需 | 先验证价值再花钱 |
+| A9 | Apple Developer | **永不购买**(2026-04-24 定) | 零花费路线;用户 xattr 绕过 Gatekeeper |
 | A10 | UI 布局 | 三区(Sidebar/Main/Panel),主区只放终端 | 保持"终端首先是终端"心智 |
 | A11 | Event 类型 | type 封闭 12 种 + category 开放 | 结构稳定,扩展灵活 |
 | A12 | 存储方案 | SQLite + raw_payload 90 天归档 | 稳定 ≤ 1GB/年 |
+| A13 | 开发模式 | **Claude 主导开发 + 用户仅验收**(2026-04-24 定) | 用户无时间深度参与;质量由 Claude 对 CLAUDE.md 自律保障 |
+| A14 | 分发策略 | **永不签名,xattr 路线**(2026-04-24 定) | 与 A9 一致;README 首页清晰说明 |
+| A15 | v1 范围 | **保持聚焦**,不提前纳入 MCP / 多工具 / 浏览器(2026-04-24 定) | 先聚焦发布 v0.1 Beta,再按社区反馈决定扩展方向 |
+| A16 | 质量基准 | **生产级不降格**:单测 70%+ / UI 自动化 / 可访问性 / 本地化(2026-04-24 定) | 定位"完整开源级"的直接体现 |
+| A17 | 遥测 | **零遥测**(不加 PostHog/Sentry) | 隐私优先 + 零成本 |
+| A18 | 域名 | **不买**,用 `cairn.github.io` / GitHub Pages | 零花费路线 |
 
 ---
 
