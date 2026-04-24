@@ -81,3 +81,21 @@ def test_collect_stats_on_minimal_fixture():
     assert stats['tool_names']['Read'] == 1
     assert 'input_tokens' in stats['usage_keys']
     assert 'output_tokens' in stats['usage_keys']
+
+
+def test_write_report_produces_markdown(tmp_path):
+    from probe import collect_stats, write_report
+
+    stats = collect_stats([FIXTURES / "sample_minimal.jsonl"])
+    out = tmp_path / "report.md"
+    write_report(stats, out)
+
+    assert out.exists()
+    content = out.read_text()
+    assert "# Cairn Probe Report" in content
+    assert "Entry Types" in content
+    assert "Content Block Types" in content
+    assert "Tool" in content
+    assert "Usage" in content
+    assert "system" in content
+    assert "assistant" in content
