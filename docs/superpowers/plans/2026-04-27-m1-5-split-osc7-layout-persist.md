@@ -379,9 +379,21 @@ public enum OSC7Parser {
 }
 ```
 
-- [ ] **Step 2:TabSession 加 updateCwd**
+- [ ] **Step 2:TabSession 升级为 `@Observable` + 加 `updateCwd`**
 
-修改 `Sources/CairnTerminal/TabSession.swift`,在 class 里加:
+修改 `Sources/CairnTerminal/TabSession.swift`:
+
+a) **class 声明加 `@Observable` 宏**(M1.4 无此宏,因 title/state 从不变,TabBarView 无需 reactive 渲染 — M1.5 OSC 7 开始动态改 title,必须 @Observable 让 SwiftUI 追踪):
+
+```swift
+@Observable
+@MainActor
+public final class TabSession: Identifiable, Equatable {
+    // 字段不变
+}
+```
+
+b) 在 class 里加 `updateCwd` 方法:
 
 ```swift
 /// OSC 7 上报新 cwd 时调用。同时更新 title(basename 反映当前目录)。
@@ -393,6 +405,11 @@ public func updateCwd(_ newCwd: String) {
     title = "\(basename.isEmpty ? "~" : basename) (\(shellName))"
 }
 ```
+
+**@Observable 的微妙要点**:
+- `Identifiable` + `Equatable` 协议 conformance 与 `@Observable` 兼容(@Observable 只是添加 observation tracking 的 overlay,不影响协议实现)
+- 已手写的 `static func ==` 保留不变
+- `terminalView: LocalProcessTerminalView` 是 NSView 引用,不该被 SwiftUI 追踪变化 —— 这是 @Observable 在引用类型属性上的天然行为(只追踪**赋值**,不追踪引用对象内部变化),符合预期
 
 - [ ] **Step 3:build 验证 + 不 commit(连锁到 T6)**
 
@@ -479,21 +496,22 @@ public enum LayoutSerializer {
         let restoredGroups: [TabGroup] = layout.groups.map { g in
             let group = TabGroup()
             for persisted in g.tabs {
-                let session = TabSessionFactory.create(
+                // forward-ref 模式:session 的新 id 在 factory 返回后才知道,
+                // 但 callback 必须在 factory 调用前就构造好。用 var 捕获,
+                // callback 里读 created.id(assigned 后可用)。
+                // 这样 onProcessTerminated 发的是**新** id,与 SplitCoordinator
+                // 里 group.tabs 持有的 session id 一致,handleTabTerminated
+                // 能查到。
+                var created: TabSession!
+                created = TabSessionFactory.create(
                     workspaceId: persisted.workspaceId,
                     shell: persisted.shell,
                     cwd: persisted.cwd,
-                    onProcessTerminated: { [weak group] _ in
-                        _ = group  // capture to keep alive if needed
-                        onProcessTerminated(persisted.id)
+                    onProcessTerminated: { _ in
+                        onProcessTerminated(created.id)
                     }
                 )
-                // factory 会给新 session 新 id;我们覆盖为 persisted.id 保持一致
-                // —— 但 TabSession.id 是 `let`,不能改。方案:让 factory 接受 id
-                // 参数;为避免扩大 factory 接口,restore 里构造 TabSession 手动加。
-                // 实际:factory 的 id 是 UUID(),恢复时用新 id。旧 persisted.id
-                // 失效,activeTabId 要在 group 里按位置匹配而非 id 匹配。
-                group.appendRestoredTab(session)
+                group.appendRestoredTab(created)
             }
             // activeTabId 恢复:按"persisted tabs 里匹配 activeTabId 的**位置**"
             if let oldActive = g.activeTabId,
@@ -1469,8 +1487,15 @@ swift test 2>&1 | grep "Executed" | tail -3
 **风险 2(中)**:**@Observable 的 .onChange + 数组映射 trigger 可靠性**。
 `.onChange(of: split.groups.map { $0.tabs.count })` 用派生值监听,可能漏变化(如内部 cwd 改动不触发)。若持久化不完全,手动调 `scheduleAutoSave` 在所有可能改状态的方法里。
 
-**风险 3(低)**:**TabSession.id restore 时新生成**。
-PersistedTab.id 记录的是旧 session id;restore 新构造 session 时 id 不同(Swift `let` 无法修改)。v1 妥协:activeTabId 按位置匹配。文档化。
+**风险 3(已消除)**:~~`LayoutSerializer.restore` callback 捕获旧 `persisted.id` 而非新 session id~~。
+初稿 callback 里 `onProcessTerminated(persisted.id)` 会发送**旧** UUID,但 `SplitCoordinator.handleTabTerminated` 查的是 group 里 session 的**新** UUID(TabSession.id 是 let 不可改,Factory 为恢复的 session 分配新 id),shell exit 时查不到 tab、tab 不会自动移除。
+修正:用 `var created: TabSession!` forward-ref 模式,callback 里引用 `created.id`(factory 返回后可用的新 id)—— 与 `TabGroup.openTab` 里同样模式一致。
+
+**风险 6(已消除)**:~~TabSession 未 @Observable,OSC 7 改 title 后 UI 不刷新~~。
+初稿漏了这点,M1.4 因 title 静态无人察觉;M1.5 T2 Step 2 加上 `@Observable` 宏后,`cwd` / `title` / `state` 的 setter 产生 observation trigger,TabBarView 在 `tab.title` 变化时自动重渲。
+
+**残留风险**:**restore 后 tab 用新 UUID,不保留 persisted.id**。
+Swift `let id: UUID` 无法修改;M1.5 的妥协是 activeTabId 按**位置**匹配(见 T3 restore 逻辑)。用户视角:重启后 tab 视觉相似但底层 id 不同。影响极小(id 未暴露给用户)。
 
 **风险 4(低)**:**OSC 7 shell 配置**。
 需要 shell 主动发 OSC 7。zsh 默认不发,需配 `chpwd` hook 或装主题(powerlevel10k / starship 自带)。**兜底**:spec §5.5 说 "新 Tab 启动时向环境变量注入 chpwd_hook for zsh/bash(用户可关)" —— 本 milestone **不做这个兜底**(留 v1.5 polish);若用户未配,`cd` 不更新 title,但基本功能不坏。
