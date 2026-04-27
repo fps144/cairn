@@ -78,9 +78,9 @@ Sources/CairnUI/
 
 ## 架构硬约束(不得违反)
 
-- CairnUI **只** import `SwiftUI` / `CairnServices` / `CairnTerminal`(spec §3.2);**不能** import CairnStorage / CairnClaude / CairnCore 之外的 Foundation 符号
+- CairnUI **允许** import `SwiftUI` / `CairnCore` / `CairnServices` / `CairnTerminal`(spec §3.2);**不能** import `CairnStorage` / `CairnClaude`(spec 明示"UI 不直接 import CairnStorage";CairnClaude 对应通配)
 - CairnApp **只** import `SwiftUI` / `CairnUI`
-- **不允许**在 View body 里写业务逻辑;状态变更经 `@State` 或 `MainWindowViewModel`
+- **不允许**在 View body 里写业务逻辑;状态变更经 `@State` / `@Binding` / `MainWindowViewModel`
 - 所有文本必须可本地化:暂时用英文字面量,M4.1 起批量迁移 `String(localized:)`(本 milestone 不做本地化)
 
 ---
@@ -100,14 +100,24 @@ import CairnTerminal
 
 /// Cairn 主窗口根视图。spec §6.1 三区布局。
 ///
-/// - Sidebar:Task 列表(v1.3 占位);280pt 默认宽,`⌘⇧T` 折叠
+/// 折叠状态由**调用方(Scene)持有**并通过 `@Binding` 注入 —— Scene-level
+/// commands 里的 `⌘⇧T` / `⌘I` 菜单项直接 toggle 这两个 state,
+/// 避免 `NSApp.tryToPerform(toggleSidebar:)` 这类 AppKit 桥接的脆弱性。
+///
+/// - Sidebar:Task 列表(M1.3 占位);280pt 默认宽,`⌘⇧T` 折叠
 /// - Main Area:TerminalSurface + Tab Bar + Status Bar
-/// - Right Panel (Inspector):Current Task / Budget / Timeline(v1.3 占位);360pt 默认宽,`⌘I` 折叠
+/// - Right Panel (Inspector):Current Task / Budget / Timeline(M1.3 占位);360pt 默认宽,`⌘I` 折叠
 public struct MainWindowView: View {
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var showInspector: Bool = true
+    @Binding var columnVisibility: NavigationSplitViewVisibility
+    @Binding var showInspector: Bool
 
-    public init() {}
+    public init(
+        columnVisibility: Binding<NavigationSplitViewVisibility>,
+        showInspector: Binding<Bool>
+    ) {
+        _columnVisibility = columnVisibility
+        _showInspector = showInspector
+    }
 
     public var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -121,7 +131,7 @@ public struct MainWindowView: View {
                 .inspectorColumnWidth(min: 280, ideal: 360, max: 500)
         }
         .toolbar {
-            ToolbarContent(showInspector: $showInspector)
+            CairnToolbarContent(showInspector: $showInspector)
         }
     }
 
@@ -154,8 +164,12 @@ public struct MainWindowView: View {
 
 #if DEBUG
 #Preview("Main window") {
-    MainWindowView()
-        .frame(width: 1280, height: 800)
+    // Preview 用 .constant 提供静态 Binding
+    MainWindowView(
+        columnVisibility: .constant(.all),
+        showInspector: .constant(true)
+    )
+    .frame(width: 1280, height: 800)
 }
 #endif
 ```
@@ -323,7 +337,10 @@ import SwiftUI
 
 /// 主窗口顶部工具条。spec §6.1 顶端示意。
 /// 本 milestone:workspace 选择器占位 + 通知 / 设置 / Inspector 切换按钮。
-public struct ToolbarContent: ToolbarContent {
+///
+/// **命名注**:SwiftUI 自身有 `ToolbarContent` 协议;我们这个 struct
+/// 取名 `CairnToolbarContent` 以避 `struct X: X` 形式的递归类型歧义。
+public struct CairnToolbarContent: ToolbarContent {
     @Binding var showInspector: Bool
 
     public init(showInspector: Binding<Bool>) {
@@ -368,7 +385,7 @@ public struct ToolbarContent: ToolbarContent {
                         ? "sidebar.right"
                         : "sidebar.trailing")
             }
-            .keyboardShortcut("i", modifiers: .command)
+            // ⌘I 快捷键在 Scene commands 里绑,此处不重复(避免歧义)
             .help("Toggle inspector (⌘I)")
         }
     }
@@ -381,6 +398,7 @@ public struct ToolbarContent: ToolbarContent {
 
 ```swift
 import SwiftUI
+import CairnCore
 
 /// 窗口底部状态栏:cwd / git branch(v1 占位)。spec §6.1。
 public struct StatusBarView: View {
@@ -392,7 +410,8 @@ public struct StatusBarView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("Cairn v0.3.0-m1.3")
+            // 引用 CairnCore.scaffoldVersion 避免硬编码 —— bump 版本时自动跟随
+            Text("Cairn v\(CairnCore.scaffoldVersion)")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -442,12 +461,23 @@ Inspector toggle 快捷键由 T4 的 `.keyboardShortcut("i", modifiers: .command
 
 ---
 
-## T6:`CairnApp` 切到 `MainWindowView` + Scene 级快捷键
+## T6:`CairnApp` 切到 `MainWindowView` + Scene 级 @State + 快捷键
 
 **Files:**
 - Modify: `Sources/CairnApp/CairnApp.swift`
+- Modify: `Package.swift`(CairnUI target 加 `CairnCore` 为直接依赖)
 
-- [ ] **Step 1:重写 CairnApp.swift**
+- [ ] **Step 1:Package.swift 加 CairnUI → CairnCore 依赖**
+
+找到 `.target(name: "CairnUI", dependencies: ["CairnServices", "CairnTerminal"])`,改为:
+
+```swift
+.target(name: "CairnUI", dependencies: ["CairnCore", "CairnServices", "CairnTerminal"]),
+```
+
+**理由**:StatusBarView 里 `Text("Cairn v\(CairnCore.scaffoldVersion)")` 需要 `import CairnCore`;SwiftPM 要求 import 的模块是**直接**声明的 dep(transitive 依赖不能 import)。spec §3.2 只禁止"UI 直接 import CairnStorage",不禁 CairnCore。
+
+- [ ] **Step 2:重写 CairnApp.swift(scene-level @State + commands)**
 
 ```swift
 import SwiftUI
@@ -455,26 +485,33 @@ import CairnUI
 
 @main
 struct CairnApp: App {
+    // 折叠状态提升到 Scene 层,让 commands 和 MainWindowView 共享。
+    // 避免 NSApp.tryToPerform(toggleSidebar:) 这类 AppKit 桥接的脆弱性。
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var showInspector: Bool = true
+
     var body: some Scene {
         WindowGroup("Cairn") {
-            MainWindowView()
+            MainWindowView(
+                columnVisibility: $columnVisibility,
+                showInspector: $showInspector
+            )
         }
         .defaultSize(width: 1280, height: 800)
         .windowToolbarStyle(.unified)
         .commands {
-            // spec §6.7 键盘快捷键 — v1 实装这批
-            SidebarCommands()  // 系统默认 ⌘⇧S;我们需要 ⌘⇧T,见 CommandGroup override
-
+            // spec §6.7 快捷键 v1 本 milestone 实装这 2 个(其余 15 个留 M1.4+)
             CommandGroup(replacing: .sidebar) {
                 Button("Toggle Sidebar") {
-                    NSApp.keyWindow?
-                        .firstResponder?
-                        .tryToPerform(
-                            #selector(NSSplitViewController.toggleSidebar(_:)),
-                            with: nil
-                        )
+                    columnVisibility =
+                        (columnVisibility == .detailOnly) ? .all : .detailOnly
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Button("Toggle Inspector") {
+                    showInspector.toggle()
+                }
+                .keyboardShortcut("i", modifiers: .command)
             }
         }
     }
@@ -482,12 +519,13 @@ struct CairnApp: App {
 ```
 
 **设计说明**:
-- macOS 的 `NavigationSplitView` 默认响应 `toggleSidebar:` selector,系统默认 `⌘⇧S`
-- 用 `CommandGroup(replacing: .sidebar)` 替换默认菜单项,注入我们自定义的 `⌘⇧T`
-- `NSApp.keyWindow?.firstResponder?.tryToPerform(...)` 是触发 toggleSidebar 的标准 AppKit 桥
-- Inspector 快捷键 `⌘I` 已在 T4 的 ToolbarContent 按钮上绑定,不需要再 Scene 层加
+- 折叠状态 Scene-level `@State` → commands 和 MainWindowView 共享 `Binding`
+- `⌘⇧T` / `⌘I` 菜单命令直接 toggle state,纯 SwiftUI,无 AppKit
+- `CommandGroup(replacing: .sidebar)` 替换系统默认的 "Show/Hide Sidebar" 菜单项组,把我们的两个按钮放在 View 菜单的同一区域
+- NavigationSplitView 自动响应 `$columnVisibility` 变化做折叠动画
+- `.inspector(isPresented: $showInspector)` 自动响应 bool 变化做显示/隐藏
 
-- [ ] **Step 2:swift build 验证**
+- [ ] **Step 3:swift build 验证**
 
 ```bash
 swift build 2>&1 | tail -5
@@ -495,13 +533,17 @@ swift build 2>&1 | tail -5
 
 **Expected**:`Build complete!`。
 
-- [ ] **Step 3:T1-T6 合并 commit**
+**失败排查**:
+- `No such module 'CairnCore'`(在 StatusBarView):确认 Step 1 的 Package.swift 修改已保存
+- `Cannot find 'CairnToolbarContent'`(在 MainWindowView):确认 T4 Step 1 用的是 `CairnToolbarContent` 不是旧的 `ToolbarContent`
+
+- [ ] **Step 4:T1-T6 合并 commit**
 
 由于 T1-T5 各自写了代码但未 commit(T1 因缺依赖直到 T4 才能编译,T5 仅决策),在此统一 commit:
 
 ```bash
 cd /Users/sorain/xiaomi_projects/AICoding/cairn
-git add Sources/CairnUI/ Sources/CairnApp/CairnApp.swift
+git add Sources/CairnUI/ Sources/CairnApp/CairnApp.swift Package.swift
 git commit -m "$(cat <<'EOF'
 feat(ui): 主窗口三区布局(MainWindowView + Sidebar/Inspector)
 
@@ -509,16 +551,22 @@ spec §6.1 三区结构落地:
 - MainWindowView 用 NavigationSplitView + .inspector() 组装
 - SidebarView 空态占位("No workspaces yet",M3.1 起填 Task 列表)
 - RightPanelView 3 小节占位(Current Task / Budget / Event Timeline)
-- ToolbarContent 含 Workspace 选择器 + 通知 / 设置 / Inspector toggle
-- StatusBarView 底部 cwd + 版本显示
+- CairnToolbarContent 含 Workspace 选择器 + 通知 / 设置 / Inspector toggle
+  (struct 命名加 Cairn 前缀避免与 SwiftUI 的 ToolbarContent 协议歧义)
+- StatusBarView 底部 cwd + 引用 CairnCore.scaffoldVersion(避免硬编码)
 - TerminalSurface(M0.2 产物)放在 Detail 列,行为不变
 
 键盘快捷键(spec §6.7):v1 本 milestone 实装 ⌘⇧T(Sidebar)+ ⌘I(Inspector);
-⌘⇧T 通过 CommandGroup(replacing: .sidebar) 重绑,替换系统默认 ⌘⇧S;
-⌘I 挂在 ToolbarContent 的 Inspector 按钮上。其余 15 个快捷键留 M1.4 / M3.x。
+**纯 SwiftUI**实现:Scene-level @State 管 columnVisibility / showInspector,
+Commands 里的 Button.keyboardShortcut 直接 toggle state。避免 NSApp.tryToPerform
+(toggleSidebar:) 这类 AppKit 桥接的脆弱性。其余 15 个快捷键留 M1.4 / M3.x。
 
 CairnApp 启动窗口默认尺寸 1280x800;Sidebar 220-400 / ideal 280,
 Inspector 280-500 / ideal 360 — 匹配 spec §6.1 的 280px / 360px。
+
+Package.swift 补 CairnUI → CairnCore 依赖(StatusBarView 需要
+scaffoldVersion);spec §3.2 允许 UI 直接 import CairnCore,只禁直接
+import CairnStorage。
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -912,7 +960,7 @@ git tag -l
 ### 3. 类型 / 命名一致性
 
 - `MainWindowView` / `SidebarView` / `RightPanelView` / `ToolbarContent` / `StatusBarView` / `MainWindowViewModel` — 所有命名统一以功能区域 + "View"/"ViewModel"/"ToolbarContent" 后缀
-- `ToolbarContent`(遵循 SwiftUI `ToolbarContent` 协议,复用系统名)与 `ToolbarContent(showInspector:)` 我们自定义的 struct —— **潜在冲突**:如果 Swift 编译报 "ambiguous",把我们的 struct 改名 `CairnToolbarContent`。本 plan 先按 `ToolbarContent` 写,T4 Step 1 真遇到冲突时再改
+- `CairnToolbarContent` struct 遵循 SwiftUI `ToolbarContent` 协议。初稿用 `struct ToolbarContent: ToolbarContent` 递归歧义,自检时已重命名。所有调用点(MainWindowView Line 134)已同步
 - `columnVisibility` / `showInspector` — 名字 SwiftUI 约定,统一
 - 版本 `"0.3.0-m1.3"` — CairnCore/Storage/UI 三处一致
 
@@ -922,17 +970,20 @@ T1-T10 Claude 全做;T11 用户肉眼验收。
 
 ### 5. 潜在风险
 
-**风险 1(中)**:**SwiftUI `.inspector()` API 兼容性**。
-`.inspector(isPresented:)` 是 macOS 14.0+ API。我们平台是 `.macOS(.v14)`,满足。但在某些 Xcode 版本 ≤ 15.0 下可能有 bug。本机 Xcode 26.4 应稳定。
+**风险 1(低)**:**SwiftUI `.inspector()` API 兼容性**。
+`.inspector(isPresented:)` 是 macOS 14.0+ API。我们平台是 `.macOS(.v14)`,满足。本机 Xcode 26.4 应稳定。
 
-**风险 2(低)**:**`CommandGroup(replacing: .sidebar)` 的 `toggleSidebar:` selector**。
-`NSSplitViewController.toggleSidebar(_:)` 是 AppKit API;SwiftUI 的 NavigationSplitView 底层应该响应这个 selector,但不 100% 保证。若失效,fallback:用 `@State` + `NotificationCenter` 或在 `MainWindowView` 暴露 public `toggleSidebar()` 方法。
+**风险 2(已消除)**:~~`toggleSidebar:` selector 桥接~~。
+**自检时重构**:把折叠状态提升到 Scene-level `@State`,commands 里的 `Button.keyboardShortcut` 直接 toggle state,`MainWindowView` 通过 `@Binding` 接收。**纯 SwiftUI,无 AppKit 桥接**。初稿的 `NSApp.keyWindow?.firstResponder?.tryToPerform(toggleSidebar:)` 路径已从 plan 删除。
 
-**风险 3(低)**:**Toolbar 结构 struct 命名与 SwiftUI `ToolbarContent` 协议冲突**。
-我们的 `struct ToolbarContent: ToolbarContent` 语法允许(同模块内不同命名空间),但有歧义风险。真遇到改名 `CairnToolbarContent`。
+**风险 3(已消除)**:~~`ToolbarContent` 名字冲突~~。
+**自检时重命名**:`struct ToolbarContent: ToolbarContent` 的递归类型歧义确定会报错(同时作为类型名和 conformed 协议名)。重命名为 `CairnToolbarContent`,MainWindowView 引用处同步。
 
 **风险 4(低)**:**`@MainActor` VM 在测试中的使用**。
 `MainWindowViewModelTests` 用 `@MainActor` 类级标注,需要测试 class 也 `@MainActor` 或测试方法 async。本 plan 用 class-level `@MainActor`,XCTest 支持。
+
+**风险 5(自检新发现,已消除)**:**CairnUI import CairnCore 需直接 dep**。
+SwiftPM 要求 `import` 的模块是直接声明的依赖(不能靠 transitive)。StatusBarView 用 `CairnCore.scaffoldVersion` 需要 CairnUI target 直接依赖 CairnCore。T6 Step 1 加此依赖,spec §3.2 允许(只禁 UI 直接 import CairnStorage)。
 
 ### 6. 结论
 
