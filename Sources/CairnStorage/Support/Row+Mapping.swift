@@ -22,11 +22,16 @@ extension UUID: DatabaseValueConvertible {
 // MARK: - ISO-8601 共享 formatter
 
 enum ISO8601 {
-    /// 与 CairnCore.jsonEncoder 同一策略。
+    /// CairnStorage 内部使用的 ISO-8601 formatter。
+    /// **含 fractional seconds**,保证 Date round-trip 无精度损失
+    /// (实测:`Date()` 有亚秒精度,没 fractional seconds 会在 DB round-trip 后损失)。
+    /// 这与 CairnCore.jsonEncoder 的策略略有不同(CairnCore 为兼容 M1.1
+    /// 测试保持无 fractional),但这是 CairnStorage 内部的存取管道,
+    /// 不跨模块暴露。
     /// ISO8601DateFormatter 是 thread-safe(官方文档确认)。
     static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
 
