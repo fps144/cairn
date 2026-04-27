@@ -35,7 +35,7 @@ let package = Package(
             ]
         ),
         .target(name: "CairnServices", dependencies: ["CairnCore", "CairnStorage", "CairnClaude"]),
-        .target(name: "CairnUI", dependencies: ["CairnServices", "CairnTerminal"]),
+        .target(name: "CairnUI", dependencies: ["CairnCore", "CairnServices", "CairnTerminal"]),
         .executableTarget(name: "CairnApp", dependencies: ["CairnUI"]),
         .testTarget(name: "CairnCoreTests", dependencies: ["CairnCore"]),
         .testTarget(name: "CairnStorageTests", dependencies: ["CairnStorage"]),
