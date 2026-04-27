@@ -1,23 +1,23 @@
 import SwiftUI
 import CairnTerminal
 
-/// Cairn 主窗口根视图。spec §6.1 三区布局。
+/// Cairn 主窗口根视图。spec §6.1 三区布局 + M1.5 水平分屏。
 ///
 /// 折叠状态由调用方(Scene)持有并通过 @Binding 注入;
-/// TabsCoordinator 同样由 Scene 注入,作跨视图 tab 状态管理器。
+/// SplitCoordinator 同样由 Scene 注入,管 1-2 个 TabGroup。
 public struct MainWindowView: View {
     @Binding var columnVisibility: NavigationSplitViewVisibility
     @Binding var showInspector: Bool
-    @Bindable var tabsCoordinator: TabsCoordinator
+    @Bindable var split: SplitCoordinator
 
     public init(
         columnVisibility: Binding<NavigationSplitViewVisibility>,
         showInspector: Binding<Bool>,
-        tabsCoordinator: TabsCoordinator
+        split: SplitCoordinator
     ) {
         _columnVisibility = columnVisibility
         _showInspector = showInspector
-        self.tabsCoordinator = tabsCoordinator
+        self.split = split
     }
 
     public var body: some View {
@@ -36,45 +36,35 @@ public struct MainWindowView: View {
         }
     }
 
-    /// Main Area:TabBarView + ZStack(所有 tab 的 TerminalSurface)+ StatusBar。
     private var mainArea: some View {
         VStack(spacing: 0) {
-            TabBarView(coordinator: tabsCoordinator)
-
+            splitContent
             Divider()
-
-            // ZStack 渲染所有 tabs 的 terminal view,非 active 用 opacity=0
-            // 保活(NSView 不被 SwiftUI 销毁,PTY + 缓冲保留)。
-            ZStack {
-                if tabsCoordinator.tabs.isEmpty {
-                    emptyState
-                } else {
-                    ForEach(tabsCoordinator.tabs) { tab in
-                        TerminalSurface(session: tab)
-                            .opacity(tab.id == tabsCoordinator.activeTabId ? 1 : 0)
-                            .allowsHitTesting(tab.id == tabsCoordinator.activeTabId)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-
             StatusBarView()
         }
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "terminal")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            Text("No active tab")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-            Text("Press ⌘T to open a new terminal.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+    @ViewBuilder
+    private var splitContent: some View {
+        if split.groups.count >= 2 {
+            HSplitView {
+                TabGroupView(
+                    group: split.groups[0],
+                    isActiveGroup: split.activeGroupIndex == 0,
+                    onTapActivate: { split.activeGroupIndex = 0 }
+                )
+                TabGroupView(
+                    group: split.groups[1],
+                    isActiveGroup: split.activeGroupIndex == 1,
+                    onTapActivate: { split.activeGroupIndex = 1 }
+                )
+            }
+        } else {
+            TabGroupView(
+                group: split.groups[0],
+                isActiveGroup: true,
+                onTapActivate: {}
+            )
         }
     }
 }
@@ -84,7 +74,7 @@ public struct MainWindowView: View {
     MainWindowView(
         columnVisibility: .constant(.all),
         showInspector: .constant(true),
-        tabsCoordinator: TabsCoordinator()
+        split: SplitCoordinator()
     )
     .frame(width: 1280, height: 800)
 }

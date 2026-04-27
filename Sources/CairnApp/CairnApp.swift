@@ -1,32 +1,38 @@
 import SwiftUI
 import CairnUI
 import CairnTerminal
+import CairnStorage
 
 @main
 struct CairnApp: App {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showInspector: Bool = true
-    @State private var tabsCoordinator = TabsCoordinator()
+    @State private var split = SplitCoordinator()
 
-    /// v1 没有真实 workspace 管理,用固定 UUID 作 "default workspace"
-    /// 占位。M3.5 Workspace 管理就位后替换为真实 workspace id。
+    /// M1.5 持久化:每次 @Observable 变化后 debounce 500ms 再写 DB
+    @State private var saveTask: Task<Void, Never>?
+
+    /// v1 defaultWorkspaceId(M3.5 后替换为真实)
     private let defaultWorkspaceId = UUID()
 
+    /// 持久化用的 DB(task 里初始化)
+    @State private var database: CairnDatabase?
+
     var body: some Scene {
-        // 用显式 content: 标签消歧义(macOS 14+ WindowGroup 有 content: 和
-        // makeContent: 两个 init 签名,trailing closure 无法唯一匹配)
         WindowGroup("Cairn", content: {
             MainWindowView(
                 columnVisibility: $columnVisibility,
                 showInspector: $showInspector,
-                tabsCoordinator: tabsCoordinator
+                split: split
             )
-            .onAppear {
-                // 启动时默认开一个 tab(方便用户)
-                if tabsCoordinator.tabs.isEmpty {
-                    tabsCoordinator.openTab(workspaceId: defaultWorkspaceId)
-                }
+            .task {
+                await initializeDatabase()
             }
+            // Observable 变化触发保存 debounce
+            .onChange(of: split.groups.map { $0.tabs.count }) { _, _ in scheduleAutoSave() }
+            .onChange(of: split.groups.flatMap { $0.tabs }.map(\.cwd)) { _, _ in scheduleAutoSave() }
+            .onChange(of: split.groups.map { $0.activeTabId }) { _, _ in scheduleAutoSave() }
+            .onChange(of: split.activeGroupIndex) { _, _ in scheduleAutoSave() }
         })
         .defaultSize(width: 1280, height: 800)
         .windowToolbarStyle(.unified)
@@ -34,8 +40,7 @@ struct CairnApp: App {
             CommandGroup(replacing: .sidebar) {
                 Button("Toggle Sidebar") {
                     withAnimation {
-                        columnVisibility =
-                            (columnVisibility == .detailOnly) ? .all : .detailOnly
+                        columnVisibility = (columnVisibility == .detailOnly) ? .all : .detailOnly
                     }
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
@@ -48,34 +53,114 @@ struct CairnApp: App {
                 .keyboardShortcut("i", modifiers: .command)
             }
 
-            // M1.4 Tab 快捷键(spec §6.7)
             CommandGroup(after: .newItem) {
                 Button("New Tab") {
                     withAnimation {
-                        // 显式 discard:openTab 返回 TabSession,否则
-                        // withAnimation 泛型 Result 推断成 TabSession 与
-                        // Button action 的 Void 冲突。
-                        _ = tabsCoordinator.openTab(workspaceId: defaultWorkspaceId)
+                        _ = split.activeGroup.openTab(
+                            workspaceId: defaultWorkspaceId,
+                            onProcessTerminated: { [weak split] tabId in
+                                split?.handleTabTerminated(tabId: tabId)
+                            }
+                        )
                     }
                 }
                 .keyboardShortcut("t", modifiers: .command)
 
                 Button("Close Tab") {
                     withAnimation {
-                        tabsCoordinator.closeActiveTab()
+                        split.closeActiveTab()
                     }
                 }
                 .keyboardShortcut("w", modifiers: .command)
 
                 Button("Next Tab") {
-                    tabsCoordinator.activateNextTab()
+                    split.activeGroup.activateNextTab()
                 }
                 .keyboardShortcut("l", modifiers: .command)
 
                 Button("Previous Tab") {
-                    tabsCoordinator.activatePreviousTab()
+                    split.activeGroup.activatePreviousTab()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
+
+                // ⌘⇧D:水平分屏(spec §6.7)
+                Button("Split Horizontal") {
+                    withAnimation {
+                        split.splitHorizontal(
+                            workspaceId: defaultWorkspaceId,
+                            onProcessTerminated: { [weak split] tabId in
+                                split?.handleTabTerminated(tabId: tabId)
+                            }
+                        )
+                    }
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+            }
+        }
+    }
+
+    // MARK: - 初始化 / 恢复
+
+    @MainActor
+    private func initializeDatabase() async {
+        do {
+            let db = try await CairnDatabase(
+                location: .productionSupportDirectory,
+                migrator: CairnStorage.makeMigrator()
+            )
+            self.database = db
+
+            // 尝试 restore 布局
+            if let layoutJson = try await LayoutStateDAO.fetch(
+                workspaceId: defaultWorkspaceId, in: db
+            ) {
+                let layout = try LayoutSerializer.decode(layoutJson.layoutJson)
+                LayoutSerializer.restore(
+                    layout,
+                    into: split,
+                    onProcessTerminated: { [weak split] tabId in
+                        split?.handleTabTerminated(tabId: tabId)
+                    }
+                )
+            }
+        } catch {
+            // DB 打不开或 restore 失败,继续用空状态(不阻塞 App 启动)
+            print("[CairnApp] DB init / restore failed: \(error)")
+        }
+
+        // 首次启动 or restore 后仍无 tab → 开默认
+        if split.activeGroup.tabs.isEmpty {
+            split.activeGroup.openTab(
+                workspaceId: defaultWorkspaceId,
+                onProcessTerminated: { [weak split] tabId in
+                    split?.handleTabTerminated(tabId: tabId)
+                }
+            )
+        }
+    }
+
+    // MARK: - Persistence
+
+    /// Debounce 500ms 保存布局。反复调用会覆盖前一个 task。
+    @MainActor
+    private func scheduleAutoSave() {
+        saveTask?.cancel()
+        let snapshot = LayoutSerializer.snapshot(from: split)
+        let wsId = defaultWorkspaceId
+        let db = database
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, let db else { return }
+            do {
+                let json = try LayoutSerializer.encode(snapshot)
+                try await LayoutStateDAO.upsert(
+                    workspaceId: wsId,
+                    layoutJson: json,
+                    updatedAt: Date(),
+                    in: db
+                )
+            } catch {
+                print("[CairnApp] layout save failed: \(error)")
             }
         }
     }

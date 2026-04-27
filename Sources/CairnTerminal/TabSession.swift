@@ -1,20 +1,25 @@
 import Foundation
 import AppKit
+import Observation
 import SwiftTerm
 import CairnCore
 
 /// 一个 live 终端 tab 的句柄。包装 SwiftTerm `LocalProcessTerminalView`
-/// 实例 + Cairn 领域元数据(Tab 实体 + TabState)。
+/// 实例 + Cairn 领域元数据。
 ///
 /// 跨 UI 重绘保活:本类是 @MainActor class,强引用 terminalView。
-/// TerminalSurface.makeNSView 不再创建新 view,而是取 session.terminalView,
-/// 这样 tab 切换时 NSView 不被销毁,PTY 进程和滚动缓冲全部保留。
+/// TerminalSurface.makeNSView 返回 session.terminalView(既有),
+/// tab 切换时 NSView 不被销毁,PTY 进程和滚动缓冲保留。
+///
+/// **M1.5 升级为 @Observable**:OSC 7 动态改 title / cwd 时,
+/// SwiftUI 追踪改动,TabBarView 自动重渲染。
+@Observable
 @MainActor
 public final class TabSession: Identifiable, Equatable {
     public let id: UUID
     public var workspaceId: UUID
     public var title: String
-    /// 启动 shell 时的 cwd(spec §5.5 OSC 7 动态跟踪留 M1.5)。
+    /// shell 的当前 cwd。OSC 7 escape 上报时由 updateCwd 更新。
     public var cwd: String
     /// 启动 shell 的路径(从 $SHELL 或默认 /bin/zsh)。
     public let shell: String
@@ -44,15 +49,20 @@ public final class TabSession: Identifiable, Equatable {
         self.terminalView = terminalView
     }
 
-    /// 强制杀 PTY 进程(spec §5.2 "强杀")。调用后 state = .closed。
-    /// 用 optional chain(SwiftTerm 的 process 是 IUO,防测试里未 startProcess
-    /// 的 session 调 terminate 时 force-unwrap crash)。
+    /// 强制杀 PTY 进程。optional chain 防测试里未 startProcess 的 session 调用 crash。
     public func terminate() {
-        // SwiftTerm 1.13 的 LocalProcess.terminate() 无参(发 SIGTERM);
-        // plan 初稿按 spec §5.2 "terminate(kill)" 翻成 asKillSignal: true,
-        // 实测签名不对,改无参调用。
         terminalView.process?.terminate()
         state = .closed
+    }
+
+    /// OSC 7 上报新 cwd 时调用。同时更新 title(basename 反映当前目录)。
+    /// guard 跳过相同值避免 @Observable 无效 trigger。
+    public func updateCwd(_ newCwd: String) {
+        guard newCwd != cwd else { return }
+        cwd = newCwd
+        let basename = (newCwd as NSString).lastPathComponent
+        let shellName = (shell as NSString).lastPathComponent
+        title = "\(basename.isEmpty ? "~" : basename) (\(shellName))"
     }
 
     public static func == (lhs: TabSession, rhs: TabSession) -> Bool {
@@ -61,16 +71,9 @@ public final class TabSession: Identifiable, Equatable {
 }
 
 /// Factory:创建 TabSession 时同步启动 PTY 进程。
-/// 从 coordinator 调用,一次完成"创建对象 + startProcess"。
 @MainActor
 public enum TabSessionFactory {
-    /// 创建新 TabSession + 启动 shell 进程。
-    /// - Parameters:
-    ///   - workspaceId: 所属 workspace id
-    ///   - shell: 要启的 shell 路径;nil 时用 $SHELL,兜底 /bin/zsh
-    ///   - cwd: 启动目录;nil 时用 $HOME
-    ///   - onProcessTerminated: shell 退出 / crash 时的回调(强制 @MainActor)
-    /// - Returns: TabSession 实例,已 startProcess
+    /// 创建新 TabSession + 启动 shell 进程 + 挂 OSC 7 / processTerminated delegate。
     public static func create(
         workspaceId: UUID,
         shell shellPath: String? = nil,
@@ -90,9 +93,17 @@ public enum TabSessionFactory {
 
         let view = LocalProcessTerminalView(frame: .zero)
 
-        // 安装 delegate(先创建 observer,startProcess 前挂上以确保
-        // 进程退出事件不丢)
-        let observer = ProcessTerminationObserver(onTerminated: onProcessTerminated)
+        // Observer 需要在 startProcess 前挂;但 onCwdUpdate callback 需要引用
+        // 尚未构造的 session。SessionHolder forward-ref 解决:holder weak 指向
+        // session,session 构造后填 holder,observer callback 通过 holder
+        // 拿 session 调 updateCwd。
+        let sessionHolder = SessionHolder()
+        let observer = ProcessTerminationObserver(
+            onTerminated: onProcessTerminated,
+            onCwdUpdate: { [weak sessionHolder] newCwd in
+                sessionHolder?.session?.updateCwd(newCwd)
+            }
+        )
         view.processDelegate = observer
 
         view.startProcess(
@@ -110,44 +121,56 @@ public enum TabSessionFactory {
             shell: shell,
             terminalView: view
         )
-        // 把 observer 绑到 session 上防止被 ARC 释放
         session.processObserver = observer
+        sessionHolder.session = session
         return session
     }
 }
 
-/// 监听 LocalProcessTerminalView 的 processTerminated 事件。
-/// 为避免 SwiftTerm 原生 delegate 协议泄漏到 coordinator,用一个
-/// 内部 observer class 转发。
+/// Observer 先构造 / session 后构造的 forward-ref 容器。
+/// private 限定本文件内部使用。
+@MainActor
+private final class SessionHolder {
+    weak var session: TabSession?
+}
+
+/// 监听 LocalProcessTerminalView 的 delegate 事件:
+/// - processTerminated: shell 退出
+/// - hostCurrentDirectoryUpdate: OSC 7 cwd 上报
+///
+/// 其他 delegate 方法(sizeChanged / setTerminalTitle)本 milestone 不处理。
 @MainActor
 public final class ProcessTerminationObserver: NSObject, LocalProcessTerminalViewDelegate {
-    public typealias Callback = @MainActor (_ exitCode: Int32?) -> Void
+    public typealias TerminationCallback = @MainActor (_ exitCode: Int32?) -> Void
+    public typealias CwdUpdateCallback = @MainActor (_ newDirectory: String) -> Void
 
-    private let onTerminated: Callback
+    private let onTerminated: TerminationCallback
+    private let onCwdUpdate: CwdUpdateCallback
 
-    public init(onTerminated: @escaping Callback) {
+    public init(
+        onTerminated: @escaping TerminationCallback,
+        onCwdUpdate: @escaping CwdUpdateCallback
+    ) {
         self.onTerminated = onTerminated
+        self.onCwdUpdate = onCwdUpdate
         super.init()
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
-
-    // 注:SwiftTerm 1.13 的 LocalProcessTerminalViewDelegate 协议里 4 个方法
-    // 用了两种 source 类型:
-    //   - sizeChanged / setTerminalTitle: source: LocalProcessTerminalView
-    //   - hostCurrentDirectoryUpdate / processTerminated: source: TerminalView
-    // 不要尝试统一,保持与协议原样一致。
+    // SwiftTerm 1.13 协议:4 方法 source 类型混用,保持原样。
 
     public func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         // v1 无需处理(SwiftTerm 内部已发 TIOCSWINSZ)
     }
 
     public func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        // v1 不用 OSC 2/1 标题(M1.5 OSC 7 cwd 一起考虑)
+        // v1 不用 OSC 2/1 标题(M1.5 OSC 7 cwd 更贴近需求)
     }
 
     public func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
-        // OSC 7 cwd 跟踪留 M1.5
+        guard let directory,
+              let parsed = OSC7Parser.parse(directory) else { return }
+        onCwdUpdate(parsed)
     }
 
     public func processTerminated(source: TerminalView, exitCode: Int32?) {
