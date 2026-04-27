@@ -3,23 +3,21 @@ import CairnTerminal
 
 /// Cairn 主窗口根视图。spec §6.1 三区布局。
 ///
-/// 折叠状态由**调用方(Scene)持有**并通过 `@Binding` 注入 —— Scene-level
-/// commands 里的 `⌘⇧T` / `⌘I` 菜单项直接 toggle 这两个 state,
-/// 避免 `NSApp.tryToPerform(toggleSidebar:)` 这类 AppKit 桥接的脆弱性。
-///
-/// - Sidebar:Task 列表(M1.3 占位);280pt 默认宽,`⌘⇧T` 折叠
-/// - Main Area:TerminalSurface + Tab Bar + Status Bar
-/// - Right Panel (Inspector):Current Task / Budget / Timeline(M1.3 占位);360pt 默认宽,`⌘I` 折叠
+/// 折叠状态由调用方(Scene)持有并通过 @Binding 注入;
+/// TabsCoordinator 同样由 Scene 注入,作跨视图 tab 状态管理器。
 public struct MainWindowView: View {
     @Binding var columnVisibility: NavigationSplitViewVisibility
     @Binding var showInspector: Bool
+    @Bindable var tabsCoordinator: TabsCoordinator
 
     public init(
         columnVisibility: Binding<NavigationSplitViewVisibility>,
-        showInspector: Binding<Bool>
+        showInspector: Binding<Bool>,
+        tabsCoordinator: TabsCoordinator
     ) {
         _columnVisibility = columnVisibility
         _showInspector = showInspector
+        self.tabsCoordinator = tabsCoordinator
     }
 
     public var body: some View {
@@ -38,39 +36,55 @@ public struct MainWindowView: View {
         }
     }
 
-    /// Main Area:Tab Bar(v1.3 占位)+ Terminal + Status Bar。
+    /// Main Area:TabBarView + ZStack(所有 tab 的 TerminalSurface)+ StatusBar。
     private var mainArea: some View {
         VStack(spacing: 0) {
-            // Tab Bar 占位(M1.4 填充真实 tabs)
-            HStack(spacing: 8) {
-                Text("~ (zsh)")
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 4))
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.bar)
+            TabBarView(coordinator: tabsCoordinator)
 
             Divider()
 
-            // Terminal — 直接用 CairnTerminal 模块的 TerminalSurface
-            TerminalSurface()
+            // ZStack 渲染所有 tabs 的 terminal view,非 active 用 opacity=0
+            // 保活(NSView 不被 SwiftUI 销毁,PTY + 缓冲保留)。
+            ZStack {
+                if tabsCoordinator.tabs.isEmpty {
+                    emptyState
+                } else {
+                    ForEach(tabsCoordinator.tabs) { tab in
+                        TerminalSurface(session: tab)
+                            .opacity(tab.id == tabsCoordinator.activeTabId ? 1 : 0)
+                            .allowsHitTesting(tab.id == tabsCoordinator.activeTabId)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
             StatusBarView()
         }
     }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "terminal")
+                .font(.system(size: 48))
+                .foregroundStyle(.tertiary)
+            Text("No active tab")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            Text("Press ⌘T to open a new terminal.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
 }
 
 #if DEBUG
 #Preview("Main window") {
-    // Preview 用 .constant 提供静态 Binding
     MainWindowView(
         columnVisibility: .constant(.all),
-        showInspector: .constant(true)
+        showInspector: .constant(true),
+        tabsCoordinator: TabsCoordinator()
     )
     .frame(width: 1280, height: 800)
 }
