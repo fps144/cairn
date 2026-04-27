@@ -10,5 +10,5 @@ import Foundation
 /// 按所有字段比较/hash)。日期序列化统一 ISO-8601,见 `ISO8601Coding.swift`。
 public enum CairnCore {
     /// 模块版本标识。每个 milestone 完成时 bump。
-    public static let scaffoldVersion = "0.1.0-m1.1"
+    public static let scaffoldVersion = "0.2.0-m1.2"
 }

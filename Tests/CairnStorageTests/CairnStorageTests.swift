@@ -1,10 +1,24 @@
 import XCTest
+import GRDB
 @testable import CairnStorage
 
-// 占位测试文件,T2 将替换为真实 smoke 测试。
-// 存在原因:SPM 要求 .testTarget 声明时对应目录必须含至少一个 .swift 源文件。
 final class CairnStorageTests: XCTestCase {
-    func test_placeholder_willBeReplacedInT2() {
-        XCTAssertTrue(true)
+    func test_scaffoldVersion_matchesCore() {
+        // CairnStorage.scaffoldVersion 与 CairnCore.scaffoldVersion 相等
+        XCTAssertEqual(CairnStorage.scaffoldVersion,
+                       "0.2.0-m1.2",
+                       "M1.2 应 bump 到 0.2.0-m1.2,见设计决策")
+    }
+
+    func test_inMemoryDatabase_opensAndClosesCleanly() async throws {
+        var migrator = DatabaseMigrator()
+        migrator.registerMigration("noop") { db in
+            try db.execute(sql: "CREATE TABLE test (id INTEGER)")
+        }
+        let db = try await CairnDatabase(location: .inMemory, migrator: migrator)
+        let count = try await db.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM test") ?? -1
+        }
+        XCTAssertEqual(count, 0)
     }
 }
