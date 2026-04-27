@@ -19,7 +19,6 @@
 
 ## 待完成
 
-- [ ] M1.2 CairnStorage(GRDB + 11 表 + migrator)
 - [ ] M1.3 主窗口三区布局
 - [ ] M1.4 多 Tab + PTY 生命周期
 - [ ] M1.5 水平分屏 + OSC 7 + 布局持久化
@@ -30,6 +29,45 @@
 ---
 
 ## 已完成(逆序)
+
+### M1.2 CairnStorage(GRDB + 11 表 + migrator + DAO)
+
+**Completed**: 2026-04-27
+**Tag**: `m1-2-done`
+**Commits**: 12 个(`5819839` … `098b8ed`)
+
+**Summary**:
+- Package.swift 加 GRDB 7.10.0 依赖,**tools-version 5.9 不变**(自检发现 SwiftPM 允许低 tools 包依赖高 tools 包;本机 Swift 6.3.1 解析 GRDB 的 6.1 manifest 无障碍 —— 实证通过)
+- `CairnStorage` 模块完整落地:`CairnDatabase` actor(封装 `DatabaseQueue`)+ `DatabaseConfiguration`(cache_size/foreign_keys PRAGMA)+ `DatabaseMigrator`(v1 schema)+ 9 个 DAO + Row 映射辅助(UUID 显式 `DatabaseValueConvertible` 扩展)
+- **11 张表全部创建**,索引齐全(spec §D),`schema_versions(1, ...)` 已插入
+- **99 个单测全绿**(M1.1 的 54 + M1.2 的 45)—— 超 plan 目标 45
+- CASCADE / UNIQUE / 分页 / 枚举 rawValue roundtrip / JSON 列 / 内存 DB / 幂等 migration 全覆盖
+
+**关键设计决策**(plan pinned):
+- `DatabaseQueue` 不是 `Pool`(桌面单进程,写少读多)
+- Date 存 ISO-8601 TEXT(含 fractional seconds,毫秒精度)—— spec §7.2 硬要求
+- DAO 手写 `from(row:)` / `toArguments()`,不用 GRDB `FetchableRecord` 自动合成 —— 列名 snake_case 与 Swift camelCase 映射精确可控
+- `Plan.steps` 用 `steps_json` 列存 JSON(spec §D)
+- `CairnTask.sessionIds` 走 `task_sessions` 关联表,DAO upsert 用 delete-then-insert 同步
+- **upsert 用 `ON CONFLICT(id) DO UPDATE`** 而非 `INSERT OR REPLACE` —— 后者会在 UNIQUE 冲突时删除冲突行,破坏语义
+
+**执行中遇到并解决的问题**:
+- GRDB 7 的 `queue.read/write` 是 async,Database actor 方法体改用 `try await`
+- `INSERT OR REPLACE` 对 UNIQUE(cwd) 冲突不抛错 → 改为 `ON CONFLICT(id) DO UPDATE`
+- ISO-8601 默认不含 fractional seconds,`Date()` 有微秒精度,round-trip 丢精度 → 启用 `.withFractionalSeconds`,测试用整数秒 `Date(timeIntervalSince1970:)`
+- `XCTAssertNil/Equal` 的 autoclosure 不支持 async 调用 → 先 `let val = try await`,再断言
+- `task_sessions` 的 PRIMARY KEY 让 SELECT 默认按 session_id 字典序,导致 roundtrip 测试 flaky → DAO 强制 `ORDER BY session_id`,测试对齐
+
+**Acceptance**: 见 M1.2 计划文档 T15 验收清单。
+
+**Known limitations**:
+- Approval DAO 是 v1.1 skeleton(CRUD 可用),领域类型封装留 v1.1 HookManager
+- `synchronous=NORMAL` PRAGMA 未启用,M4.3 性能测试时按需加
+- 备份 / 归档 / 诊断导出(spec §7.6)留 M4.3
+- raw_payload_json 90 天归档策略(spec §7.4)留 M4.3
+- Date 精度上限毫秒(SQLite TEXT + ISO-8601 fractional 的物理极限)
+
+---
 
 ### M1.1 CairnCore 数据类型
 
