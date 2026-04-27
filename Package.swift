@@ -40,5 +40,6 @@ let package = Package(
         .testTarget(name: "CairnCoreTests", dependencies: ["CairnCore"]),
         .testTarget(name: "CairnStorageTests", dependencies: ["CairnStorage"]),
         .testTarget(name: "CairnUITests", dependencies: ["CairnUI"]),
+        .testTarget(name: "CairnTerminalTests", dependencies: ["CairnTerminal"]),
     ]
 )
