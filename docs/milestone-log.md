@@ -19,14 +19,61 @@
 
 ## 待完成
 
-- [ ] M1.5 水平分屏 + OSC 7 + 布局持久化
-- [ ] M2.1 - M2.7 ...(详见 spec §8.5)
+- [ ] M2.1 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
 ---
 
+## 🎉 Phase 1 完成(M0.1 → M1.5)
+
+**节点**:2026-04-27
+**tag 范围**:`m0-1-done` → `m1-5-done`
+**交付**:可用的原生 macOS 终端(多 tab / 水平分屏 / PTY 生命周期 / 布局持久化),完整 CairnCore 领域模型 + CairnStorage 持久化底座就绪,120 个单测绿。
+
+**下一阶段**:Phase 2(M2.1 - M2.7)= Claude Code JSONL 观察能力,终点 v0.1 Beta 发布。
+
+---
+
 ## 已完成(逆序)
+
+### M1.5 水平分屏 + OSC 7 cwd 跟踪 + 布局 SQLite 持久化
+
+**Completed**: 2026-04-27
+**Tag**: `m1-5-done`
+**Commits**: 3 个(`983b268` / `805b142` / `251c4de`)
+
+**Summary**:
+- 架构重构:M1.4 的 `TabsCoordinator` 拆为 `TabGroup`(单组 tabs)+ `SplitCoordinator`(1-2 组)
+- `TabSession` 升级为 `@Observable`(OSC 7 动态改 title 需要 reactive)+ 新 `updateCwd` 方法
+- **OSC 7 cwd 跟踪**:`OSC7Parser` 解析 `file://host/path`(用 URL API 自动 percent-decode),`ProcessTerminationObserver` 2 个 callback(onTerminated + onCwdUpdate),`SessionHolder` forward-ref 解决 observer-先 / session-后构造
+- **水平分屏**:MainWindowView 用 `HSplitView` 渲染 1-2 个 `TabGroupView`;`⌘⇧D` 触发 `SplitCoordinator.splitHorizontal`;关 tab 到空组自动 collapse
+- **布局持久化**:`LayoutSerializer`(PersistedLayout schemaVersion=1,Codable);`.task` 异步 DB init + restore;`.onChange` 监听多维度 state → `scheduleAutoSave` debounce 500ms 写 `LayoutStateDAO`;`var created: TabSession!` forward-ref 让 restore callback 用新 UUID
+- 120 tests 全绿(M1.4 的 110 + M1.5 净增 10 —— 新 17 - 删 TabsCoordinatorTests 的 7)
+
+**架构合规**(spec §3.2):
+- `LayoutSerializer` 留在 CairnTerminal **只做 pure encode/decode/snapshot/restore**,不依赖 CairnStorage
+- DB 交互(`LayoutStateDAO.fetch` / `.upsert`)移到 `CairnApp.swift` —— orchestrator 层桥接 CairnTerminal + CairnStorage
+- Package.swift:`CairnApp` deps += `[CairnTerminal, CairnStorage]`
+
+**执行阶段修正**:
+- 架构违反:初稿 `LayoutSerializer` 直接 `import CairnStorage`,build 报 `missing required module 'GRDBSQLite'` → 移除 load/save 到 CairnApp
+- JSON 格式断言:`CairnCore.jsonEncoder` 用 `.sortedKeys` 无 `.prettyPrinted`,紧凑格式无空格;测试断言 `"schemaVersion":1`(去掉空格)
+
+**关键设计决策**(plan pinned):
+- ZStack 保活 + HSplitView 2 分屏 + onChange 派生值 debounce 持久化
+- restore 时 Swift `let id` 限制,PTY 全新启动用新 UUID,activeTabId 按**位置**匹配(影响极小,id 未暴露给用户)
+- 不持久化滚动缓冲(spec §5.6)
+
+**Acceptance**: 见 M1.5 计划文档 T11 验收清单(7 项肉眼)。
+
+**Known limitations**:
+- OSC 7 需 shell 主动发 —— 未配 chpwd hook 的 shell 不会触发 cd update(chpwd hook 兜底留 v1.5+)
+- restore 后 tab 用新 UUID(与 persisted.id 不等价)
+- 分屏拖拽位置不持久化(v1 接受)
+- 本地化留 M4.1
+
+---
 
 ### M1.4 多 Tab 管理 + TerminalSurface 封装 + PTY 生命周期
 
