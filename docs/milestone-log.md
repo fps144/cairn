@@ -19,7 +19,6 @@
 
 ## 待完成
 
-- [ ] M1.3 主窗口三区布局
 - [ ] M1.4 多 Tab + PTY 生命周期
 - [ ] M1.5 水平分屏 + OSC 7 + 布局持久化
 - [ ] M2.1 - M2.7 ...(详见 spec §8.5)
@@ -29,6 +28,45 @@
 ---
 
 ## 已完成(逆序)
+
+### M1.3 SwiftUI 主窗口三区 + Sidebar/Panel 可折叠
+
+**Completed**: 2026-04-27
+**Tag**: `m1-3-done`
+**Commits**: 3 个(`3a90342` / `5e0be96` / `060ddf5`)
+
+**Summary**:
+- `MainWindowView` 用 `NavigationSplitView` + `.inspector()` 组装 spec §6.1 三区
+- Sidebar(280pt)显"No workspaces yet" 空态,Task 列表留 M3.1
+- Main Area 保留 M0.2 的 TerminalSurface + 新增 Tab Bar / Status Bar 占位
+- Right Panel(Inspector,360pt)3 小节占位:Current Task / Budget / Event Timeline
+- Toolbar 有 Workspace 下拉 / 通知 / 设置 / Inspector toggle;`⌘I` 切 Inspector,`⌘⇧T` 切 Sidebar(通过 Scene-level `@State` + `CommandGroup(replacing: .sidebar)` 实现,**纯 SwiftUI**,无 AppKit 桥接)
+- `MainWindowViewModel` @Observable + 4 单测(M3.5+ Workspace 管理扩展预留)
+- StatusBarView 底部显示 "Cairn v" + `CairnCore.scaffoldVersion`(DRY,避免硬编码)
+- 全仓库 **103 tests** 全绿,CairnApp 启动符合 spec §6.1 设计图
+
+**关键设计决策**(plan pinned):
+- 三栏 API:`NavigationSplitView` + `.inspector()` 原生组装(不自建 HStack)
+- 折叠状态 Scene-level `@State`(非 ViewModel),commands Button 直接 toggle state
+- Main Area 不碰 M0.2 的 TerminalSurface(v1 主区只放终端,spec §6.3)
+- 不加 XCTest UI 自动化(spec §8.4 "手动验收";UI 自动化 M4.2 统一做)
+- 本 milestone 实装 2 个快捷键(⌘⇧T / ⌘I);其余 15 个留 M1.4+
+
+**执行中自检预先修复的 4 处 bug**(详见 plan 二次修订 commit `02418bb`):
+- `struct ToolbarContent: ToolbarContent` 递归类型歧义 → 改名 `CairnToolbarContent`
+- `NSApp.tryToPerform(toggleSidebar:)` AppKit 桥接脆弱 → 重构为 Scene-level `@State` + Commands
+- `Text("Cairn v0.3.0-m1.3")` 硬编码版本 → 引用 `CairnCore.scaffoldVersion`
+- CairnUI 未声明 CairnCore 直接依赖 → Package.swift 加 `CairnCore` 到 CairnUI deps
+
+**Acceptance**: 见 M1.3 计划文档 T11 验收清单(含**必做 8 项肉眼验收**)。
+
+**Known limitations**:
+- Sidebar / Panel 真实内容(Task 列表 / Budget 详情 / Event 时间线)留 M3.1-M3.3
+- 布局折叠状态不持久化(关了 App 再开重置),LayoutStateDAO 接入留 M1.5
+- 除 ⌘⇧T / ⌘I 外,spec §6.7 的 15 个快捷键留 M1.4 / M3.x
+- 本地化(`String(localized:)`)留 M4.1
+
+---
 
 ### M1.2 CairnStorage(GRDB + 11 表 + migrator + DAO)
 
