@@ -19,7 +19,6 @@
 
 ## 待完成
 
-- [ ] M1.4 多 Tab + PTY 生命周期
 - [ ] M1.5 水平分屏 + OSC 7 + 布局持久化
 - [ ] M2.1 - M2.7 ...(详见 spec §8.5)
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
@@ -28,6 +27,47 @@
 ---
 
 ## 已完成(逆序)
+
+### M1.4 多 Tab 管理 + TerminalSurface 封装 + PTY 生命周期
+
+**Completed**: 2026-04-27
+**Tag**: `m1-4-done`
+**Commits**: 5 个(`6e4edb4` / `56fed9c` / `2406cea` / `888e7a0` / `dcb4953`)
+
+**Summary**:
+- `CairnTerminal.TabSession`(@MainActor class)包 `LocalProcessTerminalView` + 领域元数据 + `ProcessTerminationObserver` 强引用
+- `CairnTerminal.TabsCoordinator`(@Observable)管 tabs + activeTabId;API:openTab / closeTab / closeActiveTab / activateTab / activateNextTab / activatePreviousTab
+- `TerminalSurface` 改为 `init(session:)` + `makeNSView` 返回 session 既有 NSView —— tab 切换时 PTY + 缓冲保活
+- 删除 M0.2 遗留的 `ContentView.swift`(死代码)
+- `CairnUI.TabBarView` 胶囊样式 + 关闭按钮 + 左 3pt 灰色状态条(v1.4 全灰;blue/orange/red 留 M2.x)
+- `MainWindowView` Main Area 用 ZStack 渲染所有 tabs:active `.opacity(1)` `.allowsHitTesting(true)`,inactive `.opacity(0)` `.allowsHitTesting(false)`
+- `CairnApp` Scene-level 注入 `TabsCoordinator`,onAppear 自动开一个 tab,commands 加 `⌘T` / `⌘W` / `⌘L` / `⌘⇧L`
+- shell 退出通过 `ProcessTerminationObserver` 触发 `removeTabWithoutTerminate`,tab 自动从 coordinator 移除
+- **110 tests 全绿**(M1.1 54 + M1.2 45 + M1.3 4 + M1.4 7)
+
+**执行阶段修正 4 处 SwiftTerm/SwiftUI API 差异**(plan 预判部分命中):
+- `process.terminate(asKillSignal: true)` → `process.terminate()`(SwiftTerm 1.13 签名无参)**— plan 风险 5 已预判,执行时 1 次 build 定位**
+- `LocalProcessTerminalViewDelegate` 4 方法 source 类型混用(`sizeChanged`/`setTerminalTitle` 要 `LocalProcessTerminalView`,`hostCurrentDirectoryUpdate`/`processTerminated` 要 `TerminalView`)
+- `WindowGroup("Cairn") { ... }` 在 macOS 14+ 有 `content:` / `makeContent:` 签名歧义 → 显式 `content:` 标签
+- `withAnimation { openTab(...) }` 泛型 Result 推断为 `TabSession` 与 Button Void 冲突 → `_ =` discard
+
+**关键设计决策**(plan pinned):
+- ZStack + opacity/hitTesting 保活策略
+- TabSession @MainActor class 强引用 LocalProcessTerminalView
+- 关 active tab 切前驱优先
+- Tab 左边框 v1 全灰
+- 新 tab cwd 继承 active tab
+- 不加 XCTest UI 自动化
+
+**Acceptance**: 见 M1.4 计划文档 T12 验收清单。
+
+**Known limitations**:
+- OSC 7 cwd 跟踪留 M1.5(现在 cwd 不随 shell `cd` 动态更新)
+- 布局持久化(关 App 再开 tabs 全丢)留 M1.5
+- Tab 左边框 blue/orange/red 颜色语义留 M2.x
+- Tab 标题不响应 `setTerminalTitle`(OSC 2)留 M1.5
+
+---
 
 ### M1.3 SwiftUI 主窗口三区 + Sidebar/Panel 可折叠
 
