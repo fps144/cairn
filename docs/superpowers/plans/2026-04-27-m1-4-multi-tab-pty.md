@@ -361,12 +361,21 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## T3:`TerminalSurface` 改造,从 TabSession 取既有 NSView
+## T3:`TerminalSurface` 改造,从 TabSession 取既有 NSView + 删 ContentView
 
 **Files:**
+- Delete: `Sources/CairnUI/ContentView.swift`(M0.2 遗留死代码,body 里有 `TerminalSurface()` 无参调用,T3 改签名后会编译失败)
 - Modify: `Sources/CairnTerminal/TerminalSurface.swift`
 
 **注**:M0.2 的 TerminalSurface 每次 makeNSView 创建新 LocalProcessTerminalView。改造后,接受一个 TabSession,makeNSView 返回 session.terminalView(既有)。
+
+- [ ] **Step 0:删除 ContentView.swift**
+
+```bash
+rm /Users/sorain/xiaomi_projects/AICoding/cairn/Sources/CairnUI/ContentView.swift
+```
+
+ContentView 在 M1.3 已被 MainWindowView 取代,留着是 M0.2 遗留。内含 `TerminalSurface()` 无参调用,本 task 改 TerminalSurface 签名后该调用会编译失败。直接删。
 
 - [ ] **Step 1:重写 TerminalSurface**
 
@@ -759,7 +768,23 @@ EOF
 
 **设计要点**:SwiftTerm 的 `LocalProcessTerminalView` 通过 `processDelegate` 通知外部进程退出。delegate 的 `processTerminated(_:exitCode:)` 在 shell exit(或被杀)后被调用。我们在此时把对应 tab 从 coordinator 移除。
 
-- [ ] **Step 1:TabSession 加 `ProcessTerminationObserver`(嵌套 class 实现 delegate)**
+- [ ] **Step 1:TabSession class 加 `processObserver` 存储属性**
+
+在 TabSession class 里(T1 写的那个)加一个 `internal var processObserver: ProcessTerminationObserver?`,用于**强引用** observer 避免 SwiftTerm 的 weak processDelegate 被 ARC 释放:
+
+```swift
+public final class TabSession: Identifiable, Equatable {
+    // ... 已有字段不变 ...
+
+    /// 强引用 ProcessTerminationObserver。SwiftTerm 的 processDelegate
+    /// 是 weak,若不强持 observer,exit 回调会丢失。
+    internal var processObserver: ProcessTerminationObserver?
+
+    // ... init / terminate 不变 ...
+}
+```
+
+- [ ] **Step 2:TabSession 加 `ProcessTerminationObserver`(同文件末尾)**
 
 追加到 `TabSession.swift` 末尾:
 
@@ -799,7 +824,7 @@ public final class ProcessTerminationObserver: NSObject, LocalProcessTerminalVie
 }
 ```
 
-- [ ] **Step 2:TabSessionFactory 创建 session 后安装 observer**
+- [ ] **Step 3:TabSessionFactory 创建 session 后安装 observer**
 
 修改 `TabSessionFactory.create`,加一个 callback 参数:
 
@@ -808,13 +833,14 @@ public static func create(
     workspaceId: UUID,
     shell shellPath: String? = nil,
     cwd startCwd: String? = nil,
-    onProcessTerminated: @escaping @MainActor (Int32?) -> Void = { _ in }
+    onProcessTerminated: @escaping @MainActor (Int32?) -> Void
 ) -> TabSession {
     // ... 前面不变 ...
 
     let view = LocalProcessTerminalView(frame: .zero)
 
-    // 安装 delegate
+    // 安装 delegate(先创建 observer,startProcess 前挂上以确保
+    // 进程退出事件不丢)
     let observer = ProcessTerminationObserver(onTerminated: onProcessTerminated)
     view.processDelegate = observer
 
@@ -834,19 +860,13 @@ public static func create(
         terminalView: view
     )
     // 把 observer 绑到 session 上防止被释放
+    // (SwiftTerm 的 processDelegate 是 weak,不强持会被 ARC 回收)
     session.processObserver = observer
     return session
 }
 ```
 
-- [ ] **Step 3:TabSession 加 processObserver 存储属性**
-
-在 TabSession class 里加一个 `internal var processObserver: ProcessTerminationObserver?`,用于强引用 observer 避免 SwiftTerm 的 weak processDelegate 被释放:
-
-```swift
-// TabSession class 内部加:
-internal var processObserver: ProcessTerminationObserver?
-```
+**注**:`onProcessTerminated` 无默认值,强制调用方提供 —— 避开 `@MainActor` 闭包的默认参数语法在某些 Swift 编译器版本下的不一致行为。唯一调用方是 TabsCoordinator.openTab,总是提供 callback。
 
 - [ ] **Step 4:TabsCoordinator 暴露"process terminated" 处理**
 
@@ -935,16 +955,18 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 在 TabsCoordinator 末尾加:
 
 ```swift
-#if DEBUG
 extension TabsCoordinator {
     /// 仅测试用:直接注入已构造的 TabSession,跳过 PTY 进程启动。
     /// `@testable import CairnTerminal` 可访问。
+    ///
+    /// 不包 `#if DEBUG` —— SPM 不自动定义 DEBUG 宏,`#if DEBUG` 在 SPM 下
+    /// 永远 false,会让 @testable 测试找不到此方法。internal 访问级别足够
+    /// 限制外部调用。
     internal func _insertForTesting(_ session: TabSession) {
         tabs.append(session)
         activeTabId = session.id
     }
 }
-#endif
 ```
 
 - [ ] **Step 2:Package.swift 加 testTarget**
@@ -1073,8 +1095,9 @@ git commit -m "test(terminal): TabsCoordinator 7 单测 + CairnTerminalTests tar
 / closeTab(含前驱切换 + 最后一个切 nil)/ activateTab 的未知 id
 noop / activateNextTab 空态 noop。
 
-_insertForTesting 是 #if DEBUG internal 测试入口 —— 不启动真实
-PTY,绕开 XCTest 沙箱对 forkpty 的限制。
+_insertForTesting 是 internal 扩展方法(通过 @testable 访问)—— 不启动
+真实 PTY,绕开 XCTest 沙箱对 forkpty 的限制。不包 #if DEBUG,因 SPM
+不自动定义 DEBUG 宏,包了反而让测试访问不到。
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
@@ -1298,6 +1321,15 @@ T1 Step 1 的 TabSession.terminate 已用 `terminalView.process?.terminate(asKil
 
 **风险 5(低,执行时验证)**:**`process.terminate(asKillSignal:)` API 签名**。
 spec §5.2 写 "terminate(kill)",本 plan 按 `terminate(asKillSignal: Bool)` 翻译。若 SwiftTerm 1.13 真实签名是 `terminate()` 无参,T1 build 会报错,改为无参即可(语义是强杀)。
+
+**风险 6(已消除)**:~~SPM 下 `#if DEBUG` 永远 false~~。
+初稿 T8 用 `#if DEBUG` 包 `_insertForTesting`,但 SPM 不自动定义 DEBUG 宏,会让测试调用失败。改为 `internal` 裸扩展(测试通过 `@testable` 访问)。
+
+**风险 7(已消除)**:~~M0.2 的 `ContentView.swift` 是死代码,T3 改 TerminalSurface 签名后编译失败~~。
+T3 Step 0 显式删除 ContentView.swift。
+
+**风险 8(已消除)**:~~T7 内部 Step 顺序反(Step 2 用了 Step 3 才声明的字段)~~。
+T7 重排为:Step 1 加 processObserver 字段 → Step 2 定义 Observer class → Step 3 factory 用字段。执行者阅读即是实施顺序。
 
 ### 6. 结论
 
