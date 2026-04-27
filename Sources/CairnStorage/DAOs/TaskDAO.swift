@@ -96,9 +96,11 @@ public enum TaskDAO {
             arguments: [id.uuidString]
         ) else { return nil }
 
+        // ORDER BY session_id 让 roundtrip 结果确定(字典序);
+        // task_sessions 的语义是"集合",顺序不承载业务含义。
         let sessionIds = try UUID.fetchAll(
             db,
-            sql: "SELECT session_id FROM task_sessions WHERE task_id = ?",
+            sql: "SELECT session_id FROM task_sessions WHERE task_id = ? ORDER BY session_id",
             arguments: [id.uuidString]
         )
 

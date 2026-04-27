@@ -95,13 +95,16 @@ final class TaskDAOTests: XCTestCase {
     }
 
     func test_codable_and_row_roundTrip_fullTask() async throws {
+        // sessionIds 语义是"集合",DAO roundtrip 按字典序返回,
+        // 本测试也按字典序构造,保证 Equatable 精确匹配。
+        let sorted = [sessionId1!, sessionId2!].sorted { $0.uuidString < $1.uuidString }
         let task = CairnTask(
             id: UUID(),
             workspaceId: workspaceId,
             title: "完整字段",
             intent: "所有字段都有值",
             status: .completed,
-            sessionIds: [sessionId1, sessionId2],
+            sessionIds: sorted,
             createdAt: Date(timeIntervalSince1970: 1_700_000_000),
             updatedAt: Date(timeIntervalSince1970: 1_700_003_600),
             completedAt: Date(timeIntervalSince1970: 1_700_003_600)
