@@ -39,5 +39,6 @@ let package = Package(
         .executableTarget(name: "CairnApp", dependencies: ["CairnUI"]),
         .testTarget(name: "CairnCoreTests", dependencies: ["CairnCore"]),
         .testTarget(name: "CairnStorageTests", dependencies: ["CairnStorage"]),
+        .testTarget(name: "CairnUITests", dependencies: ["CairnUI"]),
     ]
 )
