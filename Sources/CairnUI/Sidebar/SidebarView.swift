@@ -7,6 +7,20 @@ public struct SidebarView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // 标题栏("Tasks" 固定 header,比 .navigationTitle 可靠
+            // —— 后者在 NavigationSplitView sidebar 上不一定显示在内容区)
+            HStack {
+                Text("Tasks")
+                    .font(.title3)
+                    .bold()
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            Divider()
+
             // 筛选栏(v1.3 占位)
             HStack {
                 Image(systemName: "magnifyingglass")
@@ -36,7 +50,6 @@ public struct SidebarView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationTitle("Tasks")
     }
 }
 

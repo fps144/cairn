@@ -19,15 +19,21 @@ struct CairnApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             // spec §6.7 快捷键 v1 本 milestone 实装这 2 个(其余 15 个留 M1.4+)
+            // withAnimation 强制动画 —— 从 Scene-level command 改 columnVisibility
+            // 时 NavigationSplitView 默认不走动画,必须显式包裹
             CommandGroup(replacing: .sidebar) {
                 Button("Toggle Sidebar") {
-                    columnVisibility =
-                        (columnVisibility == .detailOnly) ? .all : .detailOnly
+                    withAnimation {
+                        columnVisibility =
+                            (columnVisibility == .detailOnly) ? .all : .detailOnly
+                    }
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
 
                 Button("Toggle Inspector") {
-                    showInspector.toggle()
+                    withAnimation {
+                        showInspector.toggle()
+                    }
                 }
                 .keyboardShortcut("i", modifiers: .command)
             }
