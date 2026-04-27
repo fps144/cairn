@@ -57,6 +57,15 @@ public final class SplitCoordinator {
         }
     }
 
+    /// 关任意 group 里的任意 tab(UI × 按钮用)。统一入口保证 close 后
+    /// 触发 collapseEmptyGroups,避免空分屏残留。
+    public func closeTab(in group: TabGroup, id: UUID) {
+        let wasEmpty = group.closeTab(id: id)
+        if wasEmpty {
+            collapseEmptyGroups()
+        }
+    }
+
     /// shell 进程自然退出回调:找到对应 tab 并移除;若组空了 collapse。
     public func handleTabTerminated(tabId: UUID) {
         for group in groups {

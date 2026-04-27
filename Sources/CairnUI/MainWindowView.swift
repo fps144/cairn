@@ -51,19 +51,37 @@ public struct MainWindowView: View {
                 TabGroupView(
                     group: split.groups[0],
                     isActiveGroup: split.activeGroupIndex == 0,
-                    onTapActivate: { split.activeGroupIndex = 0 }
+                    onTapActivate: { split.activeGroupIndex = 0 },
+                    onCloseTab: { [split] tabId in
+                        withAnimation {
+                            split.closeTab(in: split.groups[0], id: tabId)
+                        }
+                    }
                 )
                 TabGroupView(
                     group: split.groups[1],
                     isActiveGroup: split.activeGroupIndex == 1,
-                    onTapActivate: { split.activeGroupIndex = 1 }
+                    onTapActivate: { split.activeGroupIndex = 1 },
+                    onCloseTab: { [split] tabId in
+                        withAnimation {
+                            // groups 可能在回调前已被 collapse;安全查找 group
+                            if split.groups.count > 1 {
+                                split.closeTab(in: split.groups[1], id: tabId)
+                            }
+                        }
+                    }
                 )
             }
         } else {
             TabGroupView(
                 group: split.groups[0],
                 isActiveGroup: true,
-                onTapActivate: {}
+                onTapActivate: {},
+                onCloseTab: { [split] tabId in
+                    withAnimation {
+                        split.closeTab(in: split.groups[0], id: tabId)
+                    }
+                }
             )
         }
     }

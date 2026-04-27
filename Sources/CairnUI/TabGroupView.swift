@@ -7,20 +7,23 @@ public struct TabGroupView: View {
     @Bindable var group: TabGroup
     let isActiveGroup: Bool
     let onTapActivate: () -> Void
+    let onCloseTab: (UUID) -> Void
 
     public init(
         group: TabGroup,
         isActiveGroup: Bool,
-        onTapActivate: @escaping () -> Void
+        onTapActivate: @escaping () -> Void,
+        onCloseTab: @escaping (UUID) -> Void
     ) {
         self.group = group
         self.isActiveGroup = isActiveGroup
         self.onTapActivate = onTapActivate
+        self.onCloseTab = onCloseTab
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            TabBarView(group: group)
+            TabBarView(group: group, onCloseTab: onCloseTab)
 
             Divider()
 
@@ -37,11 +40,17 @@ public struct TabGroupView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .overlay(
+        // active 分屏用顶部细条做视觉区分,替代 M1.5 初稿的全边框
+        // (旧方案 .stroke accent 0.5 lineWidth 2 —— 在深色背景上偏重且
+        // 和窗口 chrome 冲突。细条方案更 native macOS 风格。)
+        .overlay(alignment: .top) {
             Rectangle()
-                .stroke(isActiveGroup ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 2)
+                .fill(isActiveGroup
+                      ? AnyShapeStyle(Color.accentColor)
+                      : AnyShapeStyle(Color.clear))
+                .frame(height: 2)
                 .allowsHitTesting(false)
-        )
+        }
         .onTapGesture {
             onTapActivate()
         }

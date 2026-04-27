@@ -12,8 +12,11 @@ struct CairnApp: App {
     /// M1.5 持久化:每次 @Observable 变化后 debounce 500ms 再写 DB
     @State private var saveTask: Task<Void, Never>?
 
-    /// v1 defaultWorkspaceId(M3.5 后替换为真实)
-    private let defaultWorkspaceId = UUID()
+    /// v1 defaultWorkspaceId:**hardcoded UUID**(stable across launches)。
+    /// 初稿用 `UUID()` 每次启动生成新 id,导致 LayoutStateDAO.fetch 永远查不到
+    /// 上次保存的布局(都是新 key)—— 恢复完全失效。
+    /// M3.5 Workspace 管理就位后替换为真实 workspace id。
+    private let defaultWorkspaceId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
     /// 持久化用的 DB(task 里初始化)
     @State private var database: CairnDatabase?
@@ -141,16 +144,17 @@ struct CairnApp: App {
 
     // MARK: - Persistence
 
-    /// Debounce 500ms 保存布局。反复调用会覆盖前一个 task。
+    /// 立即保存布局(初稿有 500ms debounce,app 退出前未完成的 task 会被
+    /// 取消,最后的改动丢失 —— 这是"开 tab 关 app 不恢复"的另一大元凶)。
+    /// 去掉 debounce,每次 onChange 都立即写 DB(SQLite upsert 小 JSON 行,
+    /// 开销可忽略,快速连续改动最多也就几次写)。
     @MainActor
     private func scheduleAutoSave() {
         saveTask?.cancel()
         let snapshot = LayoutSerializer.snapshot(from: split)
         let wsId = defaultWorkspaceId
-        let db = database
+        guard let db = database else { return }
         saveTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled, let db else { return }
             do {
                 let json = try LayoutSerializer.encode(snapshot)
                 try await LayoutStateDAO.upsert(

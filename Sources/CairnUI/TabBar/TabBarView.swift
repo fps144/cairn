@@ -2,12 +2,19 @@ import SwiftUI
 import CairnTerminal
 
 /// Main Area 顶部的 Tab Bar。spec §6.3。
-/// M1.5 改为接 TabGroup(原 TabsCoordinator 已拆成 TabGroup + SplitCoordinator)。
+/// M1.5 改为接 TabGroup;onCloseTab 由父(TabGroupView)注入,路由到
+/// SplitCoordinator 以触发 collapseEmptyGroups(否则关 B 的最后一个 tab
+/// 不会自动收拢分屏)。
 public struct TabBarView: View {
     @Bindable var group: TabGroup
+    let onCloseTab: (UUID) -> Void
 
-    public init(group: TabGroup) {
+    public init(
+        group: TabGroup,
+        onCloseTab: @escaping (UUID) -> Void
+    ) {
         self.group = group
+        self.onCloseTab = onCloseTab
     }
 
     public var body: some View {
@@ -40,7 +47,7 @@ public struct TabBarView: View {
 
             Button {
                 withAnimation {
-                    _ = group.closeTab(id: tab.id)
+                    onCloseTab(tab.id)
                 }
             } label: {
                 Image(systemName: "xmark")
