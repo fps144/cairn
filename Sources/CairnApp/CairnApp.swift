@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CairnCore
 import CairnUI
 import CairnTerminal
 import CairnStorage
@@ -172,6 +173,21 @@ struct CairnApp: App {
             )
             appDelegate.database = db
             FileHandle.standardError.write(Data("[CairnApp] DB opened\n".utf8))
+
+            // 必须先确保默认 workspace 行存在。layout_states.workspace_id 有
+            // FK 到 workspaces(id),不 upsert 这行会让后续 save 全部被 FK 拒
+            // (SQLite error 19 FOREIGN KEY constraint failed)。
+            // M3.5 接真实 Workspace 管理后,这段 bootstrap 拆到 workspace
+            // onboarding 流程里。
+            let defaultWs = Workspace(
+                id: appDelegate.defaultWorkspaceId,
+                name: "Default",
+                cwd: NSHomeDirectory()
+            )
+            try await WorkspaceDAO.upsert(defaultWs, in: db)
+            FileHandle.standardError.write(Data(
+                "[CairnApp] ensured default workspace\n".utf8
+            ))
 
             // 尝试 restore 布局
             if let layoutJson = try await LayoutStateDAO.fetch(
