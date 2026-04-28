@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M2.4 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
+- [ ] M2.5 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
@@ -36,6 +36,46 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.4 EventBus + Timeline View 基础
+
+**Completed**: 2026-04-28
+**Tag**: `m2-4-done`
+**Commits**: 8 个(`d0e23a3` EventStyleMap / `ad3ab37` TimelineViewModel / `1f3ee59` Row+Timeline / `d0565d8` RightPanel+CairnApp 正式化 / `2ba5f55` 7 tests / `026223f` scaffold bump / `0833416` UI 修:auto-switch + SF Symbols + 层级配色)
+
+**Summary**:
+- **不新增 EventBus 中间层** —— `EventIngestor.events()` M2.3 已是 fanout AsyncStream,spec §8.5 的 "AsyncStream EventBus" 直接用
+- `TimelineViewModel`(CairnServices,`@Observable @MainActor`):订阅 `ingestor.events()`,维护 `currentSessionId + events`;`handleForTesting` 测试 hook(`@testable import`)
+- `TimelineView`(CairnUI,`LazyVStack` + `ScrollViewReader` auto-scroll-to-bottom);空态引导文案
+- `EventRowView`:SF Symbol icon + summary + 时间戳一行式;error row 红色背景
+- `EventStyleMap`:spec §6.4 icon/color 集中映射
+- `RightPanelView` 接入 optional vm,瞬态显 "Initializing..."
+- `CairnApp` **正式化 Ingestor/Watcher/VM 生命周期**(非 dev env gated);双持 vm(`AppDelegate` 生命周期 + `@State` SwiftUI 观察)
+- **176 tests 全绿**(原 169 + M2.4 新 7:5 VM + 2 Row smoke)
+
+**执行阶段修正 / 偏离 plan 的 0 处**:plan 两轮自检提前修好了 6 处,执行时按 plan 零偏差。
+
+**T12 用户反馈的 2 处后续修订**(`0833416` commit):
+1. **Session 不刷新** → 改 **auto-switch**:原 plan 锁定第一个到达的 session,用户新开 claude 对话看不到。改为每次 `.persisted` sessionId 不同即切换(清 events + seenIds)
+2. **UI 丑 / icon 不统一** → emoji 换 **SF Symbols**(macOS 原生、Dark/Light 自适应、风格统一);配色分三层:icon tint 语义色 / summary `.primary` / timestamp `.tertiary`;error row 加 `.red.opacity(0.08)` 背景;间距放大(3/6→5/8pt)
+
+**关键设计决策**(plan pinned,23 条):
+- Parser 纯函数 + Tracker class + Ingestor actor + VM @MainActor 四级清晰分层
+- AsyncStream 一路直通,多订阅 fanout
+- `Event.withId` / `withPairedEventId` immutable helpers(M2.3 已加)
+- M2.4 的 auto-switch 是 T12 迭代产物,保留 Known limitation 明示 M2.6 Tab↔Session 绑定是正式方案
+
+**Acceptance**: 用户 T12 实测新开 claude 对话能立刻切换到 timeline;icon 换 SF Symbols 风格统一;cursor 持久化让 startup 无历史回放(感受"稳定无跳")。
+
+**Known limitations**(M2.6 会解决):
+- **Tab↔Session 无绑定**:所有 tab 的 claude 输出共用一个 timeline,auto-switch 覆盖;用户回不到之前 session(events 还在 DB,UI 不显示)
+- **连续同类 tool_use 不合并**("Read × 3" 逐条显示,M2.5)
+- **api_usage 每条一行**(M2.5 考虑折叠)
+- **无快捷键**(⌘⇧E 展开/折叠,M2.5)
+- **auto-scroll 不检测用户手滚意图**(上滚看历史会被新 event 打断,M2.5 优化)
+- **assistant_thinking 不默认折叠**(spec §6.4 "灰,折叠",M2.5)
+
+---
 
 ### M2.3 EventIngestor + Schema v2 + 批量事务
 
