@@ -3,7 +3,7 @@ import CairnCore
 import CairnServices
 
 /// Event Timeline —— Inspector 里的实时事件流面板。
-/// spec §6.4;M2.4 基础版本(无合并 / 折叠 / 搜索)。
+/// M2.5 起:按 TimelineEntry 分派到不同 View 组件(配对卡 / 合并 / thinking / boundary / 普通行)。
 public struct TimelineView: View {
     @Bindable var vm: TimelineViewModel
 
@@ -27,22 +27,49 @@ public struct TimelineView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    // Event 有 `let id: UUID` 但未 conform Identifiable;
-                    // 用显式 keyPath 避免改 CairnCore。
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(vm.events, id: \.id) { event in
-                            EventRowView(event: event)
-                                .id(event.id)
-                            Divider().opacity(0.3)
+                        ForEach(vm.entries, id: \.id) { entry in
+                            row(for: entry)
+                                .id(entry.id)
                         }
                     }
                 }
                 .onChange(of: vm.events.count) { _, _ in
-                    if let last = vm.events.last {
+                    if let last = vm.entries.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func row(for entry: TimelineEntry) -> some View {
+        switch entry {
+        case .single(let e):
+            if e.type == .assistantThinking {
+                ThinkingRowView(
+                    event: e,
+                    isExpanded: vm.isExpanded(entry),
+                    onToggle: { vm.toggle(entry.id) }
+                )
+            } else {
+                EventRowView(event: e)
+            }
+        case .toolCard(let use, let result):
+            ToolCardView(
+                toolUse: use, toolResult: result,
+                isExpanded: vm.isExpanded(entry),
+                onToggle: { vm.toggle(entry.id) }
+            )
+        case .mergedTools(let cat, let events):
+            MergedToolsView(
+                category: cat, events: events,
+                isExpanded: vm.isExpanded(entry),
+                onToggle: { vm.toggle(entry.id) }
+            )
+        case .compactBoundary(let e):
+            CompactBoundaryView(event: e)
         }
     }
 }

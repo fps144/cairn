@@ -136,6 +136,13 @@ struct CairnApp: App {
                     }
                 }
                 .keyboardShortcut("i", modifiers: .command)
+
+                // M2.5:⌘⇧E 展开/折叠所有可折叠 event(toolCard / mergedTools / thinking)
+                Button("Expand / Collapse All Events") {
+                    timelineVM?.toggleExpandAll()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(timelineVM == nil)
             }
 
             CommandGroup(after: .newItem) {
