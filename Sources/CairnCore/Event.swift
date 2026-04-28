@@ -53,3 +53,32 @@ public struct Event: Codable, Equatable, Hashable, Sendable {
         self.byteOffsetInJsonl = byteOffsetInJsonl
     }
 }
+
+// MARK: - Immutable helpers(M2.3)
+
+extension Event {
+    /// 返回新 Event,id 改为 `newId`,其他字段不变。
+    /// Event.id 是 let,M2.3 EventIngestor 需要"upsert 后用 DB stable id
+    /// 替换 parser 生成的随机 UUID",用这个 helper 做 immutable 变换。
+    public func withId(_ newId: UUID) -> Event {
+        return Event(
+            id: newId, sessionId: sessionId, type: type, category: category,
+            toolName: toolName, toolUseId: toolUseId, pairedEventId: pairedEventId,
+            timestamp: timestamp, lineNumber: lineNumber, blockIndex: blockIndex,
+            summary: summary, rawPayloadJson: rawPayloadJson,
+            byteOffsetInJsonl: byteOffsetInJsonl
+        )
+    }
+
+    /// 返回新 Event,pairedEventId 改为 `newPairedEventId`。
+    /// ToolPairingTracker.observe 用此填入 tool_result 的配对 id。
+    public func withPairedEventId(_ newPairedEventId: UUID?) -> Event {
+        return Event(
+            id: id, sessionId: sessionId, type: type, category: category,
+            toolName: toolName, toolUseId: toolUseId, pairedEventId: newPairedEventId,
+            timestamp: timestamp, lineNumber: lineNumber, blockIndex: blockIndex,
+            summary: summary, rawPayloadJson: rawPayloadJson,
+            byteOffsetInJsonl: byteOffsetInJsonl
+        )
+    }
+}
