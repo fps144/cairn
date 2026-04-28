@@ -16,6 +16,10 @@ import CairnClaude
 public final class TimelineViewModel {
     public private(set) var currentSessionId: UUID?
     public private(set) var events: [Event] = []
+    /// M2.5 T15 修订:改为 **stored property**,events 变动时一次性重算。
+    /// 原 computed property 导致每次 UI 读都重算 O(N),几千 events 且
+    /// ScrollView 频繁重渲时 UI 卡顿(用户反馈 "terminal 处理右侧滚动巨卡")。
+    public private(set) var entries: [TimelineEntry] = []
     /// M2.5:折叠状态 —— entry.id 作为 key。
     /// 只对**可折叠** entry(toolCard / mergedTools / thinking)生效;
     /// 其他 entry 永远展开且不在这个集合里。
@@ -51,9 +55,9 @@ public final class TimelineViewModel {
 
     // MARK: - M2.5 聚合视图 + 折叠控制
 
-    /// 聚合后的 timeline entries。每次读触发重算(events 百级下 O(N))。
-    public var entries: [TimelineEntry] {
-        TimelineAggregator.aggregate(events: events)
+    /// 重算 entries。每次 events 变动(handle 末尾)调用。O(N)。
+    private func recomputeEntries() {
+        entries = TimelineAggregator.aggregate(events: events)
     }
 
     /// 单个 entry 的折叠 toggle。只对可折叠 entry 有意义。
@@ -98,6 +102,7 @@ public final class TimelineViewModel {
     }
 
     private func handle(_ ev: EventIngestor.IngestEvent) {
+        defer { recomputeEntries() }
         switch ev {
         case .persisted(let e):
             // **auto-switch 到最新 session**(M2.4 T12 用户反馈修订):

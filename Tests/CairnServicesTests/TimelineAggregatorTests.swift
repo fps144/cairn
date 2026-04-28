@@ -130,4 +130,54 @@ final class TimelineAggregatorTests: XCTestCase {
         XCTAssertEqual(entries.count, 1,
                        "result 已被 toolCard 吃掉,不应独立再出现")
     }
+
+    /// M2.5 T15 用户反馈:**已配对的**连续同 category tool_use 也应合并
+    /// (用户期望 "Read × 3" 不管每个 Read 后有没有 result 配对)。
+    /// 合并时对应 tool_result 被 consume,不独立渲染。
+    func test_pairedContinuousSameCategory_alsoMerges() {
+        let use1 = makeEvent(type: .toolUse, category: .fileRead,
+                             toolUseId: "tu_1", lineNumber: 1)
+        let r1 = makeEvent(type: .toolResult, toolUseId: "tu_1", lineNumber: 2)
+        let use2 = makeEvent(type: .toolUse, category: .fileRead,
+                             toolUseId: "tu_2", lineNumber: 3)
+        let r2 = makeEvent(type: .toolResult, toolUseId: "tu_2", lineNumber: 4)
+        let use3 = makeEvent(type: .toolUse, category: .fileRead,
+                             toolUseId: "tu_3", lineNumber: 5)
+        let r3 = makeEvent(type: .toolResult, toolUseId: "tu_3", lineNumber: 6)
+        // 注意:实际 JSONL 里顺序是 use → result → use → result → use → result。
+        // aggregator 扫到 use1 时往后找同 cat tool_use,use2/use3 都是同 cat,
+        // 它们之间的 result 被 consume。
+        let entries = TimelineAggregator.aggregate(
+            events: [use1, r1, use2, r2, use3, r3]
+        )
+        XCTAssertEqual(entries.count, 1, "三个同 cat 合并,results 一并吞")
+        if case .mergedTools(let cat, let es) = entries[0] {
+            XCTAssertEqual(cat, .fileRead)
+            XCTAssertEqual(es.count, 3)
+        } else {
+            XCTFail("expected .mergedTools")
+        }
+    }
+
+    /// 空 thinking 被过滤(signature-only 的 Claude extended thinking)
+    func test_emptyThinking_isFiltered() {
+        let empty = makeEvent(type: .assistantThinking)  // summary="s"
+        var e = empty
+        e = Event(  // 手造一个 summary=空的 thinking
+            id: e.id, sessionId: e.sessionId, type: .assistantThinking,
+            timestamp: e.timestamp, lineNumber: e.lineNumber,
+            blockIndex: e.blockIndex, summary: ""
+        )
+        let entries = TimelineAggregator.aggregate(events: [e])
+        XCTAssertTrue(entries.isEmpty, "空 thinking 应被过滤")
+    }
+
+    func test_nonEmptyThinking_kept() {
+        let t = Event(
+            sessionId: UUID(), type: .assistantThinking,
+            timestamp: Date(), lineNumber: 1, summary: "real thinking content"
+        )
+        let entries = TimelineAggregator.aggregate(events: [t])
+        XCTAssertEqual(entries.count, 1)
+    }
 }

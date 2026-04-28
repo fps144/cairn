@@ -137,12 +137,16 @@ struct CairnApp: App {
                 }
                 .keyboardShortcut("i", modifiers: .command)
 
-                // M2.5:⌘⇧E 展开/折叠所有可折叠 event(toolCard / mergedTools / thinking)
-                Button("Expand / Collapse All Events") {
-                    timelineVM?.toggleExpandAll()
+            }
+
+            // M2.5:独立 Events 菜单(之前放在 sidebar 组里用户看不到、快捷键
+            // 也不触发)。CommandMenu 会在 menu bar 创建一个顶层菜单,让
+            // ⌘⇧E 可见可按。
+            CommandMenu("Events") {
+                Button("Expand / Collapse All") {
+                    appDelegate.timelineVM?.toggleExpandAll()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(timelineVM == nil)
             }
 
             CommandGroup(after: .newItem) {
