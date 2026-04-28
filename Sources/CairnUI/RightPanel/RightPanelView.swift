@@ -1,9 +1,15 @@
 import SwiftUI
+import CairnServices
 
 /// Right Panel(Inspector):当前 Task 的详情 / Budget / Event Timeline。
-/// spec §6.1 + §6.5-§6.6。M1.3 只做 3 小节空态占位。
+/// spec §6.1 + §6.5-§6.6。M2.4 接入 Event Timeline(vm);其余 2 section 仍空态占位。
 public struct RightPanelView: View {
-    public init() {}
+    /// optional —— App 启动过程中 vm 尚未 init 时为 nil;SwiftUI 再渲后填入。
+    let timelineVM: TimelineViewModel?
+
+    public init(timelineVM: TimelineViewModel?) {
+        self.timelineVM = timelineVM
+    }
 
     public var body: some View {
         ScrollView {
@@ -18,10 +24,22 @@ public struct RightPanelView: View {
                     emptyLine: "Budget appears when a Task is active."
                 )
 
-                section(
-                    title: "Event Timeline",
-                    emptyLine: "Events stream in as Claude Code runs."
-                )
+                // Event Timeline 节
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Event Timeline").font(.headline)
+                    if let vm = timelineVM {
+                        TimelineView(vm: vm)
+                            .frame(minHeight: 240)
+                    } else {
+                        Text("Initializing…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 240)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
             .padding(16)
         }
@@ -43,6 +61,6 @@ public struct RightPanelView: View {
 
 #if DEBUG
 #Preview {
-    RightPanelView().frame(width: 360, height: 600)
+    RightPanelView(timelineVM: nil).frame(width: 360, height: 600)
 }
 #endif

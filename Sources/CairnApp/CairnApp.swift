@@ -5,6 +5,7 @@ import CairnUI
 import CairnTerminal
 import CairnStorage
 import CairnClaude
+import CairnServices
 
 /// AppKit 代理。单一持久化入口:持有 `database` + `split` 引用,
 /// 暴露 `saveLayoutNow()` 给 SwiftUI onChange 和 `applicationWillTerminate`。
@@ -23,10 +24,13 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     var database: CairnDatabase?
     /// SplitCoordinator 由 App 在 .task 里注入;delegate 弱引用以免循环持有。
     weak var split: SplitCoordinator?
-    /// M2.1 dev-only JSONLWatcher,由 CAIRN_DEV_WATCH=1 env var 在 initialize 里挂。
+    /// M2.1 JSONLWatcher。M2.4 起正式化(非 env-gated),每次启动都起。
     var jsonlWatcher: JSONLWatcher?
-    /// M2.3 EventIngestor,同上 env var 挂。
+    /// M2.3 EventIngestor。M2.4 起正式化。
     var eventIngestor: EventIngestor?
+    /// M2.4 TimelineViewModel —— delegate 持生命周期版(willTerminate stop)。
+    /// 另外 App struct 用 @State 持一份供 SwiftUI UI 观察,赋值时触发 body 重渲。
+    var timelineVM: TimelineViewModel?
 
     /// v1 defaultWorkspaceId:硬编码 UUID,跨启动稳定。M3.5 Workspace 管理
     /// 就位后替换为真实 workspace id。
@@ -65,9 +69,10 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             saveLayoutNow(reason: "willTerminate")
-            // watcher.stop() 是 async,会起 Task;进程即将退出,可能跑不完。
-            // 但 cursor 每 chunk 已写盘,丢最后一块可接受(Known limitations)。
-            // ingestor.stop 先(停止消费 watcher.stream),再 watcher.stop。
+            // 停止顺序:vm → ingestor → watcher(反向启动顺序)
+            // vm.stop 同步;ingestor/watcher.stop 是 async,起 Task 但进程可能
+            // 来不及跑完。cursor 每 chunk 已写盘,丢最后一块可接受。
+            timelineVM?.stop()
             if let ingestor = eventIngestor {
                 Task { await ingestor.stop() }
             }
@@ -85,13 +90,17 @@ struct CairnApp: App {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showInspector: Bool = true
     @State private var split = SplitCoordinator()
+    /// M2.4 双持:delegate 持生命周期版,@State 持 UI 观察版。
+    /// initializeDatabase 里同时 set 两处。
+    @State private var timelineVM: TimelineViewModel?
 
     var body: some Scene {
         WindowGroup("Cairn", content: {
             MainWindowView(
                 columnVisibility: $columnVisibility,
                 showInspector: $showInspector,
-                split: split
+                split: split,
+                timelineVM: timelineVM
             )
             .task {
                 await initializeDatabase()
@@ -237,23 +246,32 @@ struct CairnApp: App {
             )
         }
 
-        // M2.3 dev-only harness:CAIRN_DEV_WATCH=1 启动 JSONLWatcher + EventIngestor
-        // 端到端跑,stderr 打印入库进度。真实 Claude session 的 events 会持久化
-        // 到 SQLite events 表,供 M2.4 UI 消费(当前仅计数日志)。
-        if ProcessInfo.processInfo.environment["CAIRN_DEV_WATCH"] == "1",
-           let db = appDelegate.database {
-            let root = URL(fileURLWithPath: "\(NSHomeDirectory())/.claude/projects")
-            let watcher = JSONLWatcher(
-                database: db,
-                projectsRoot: root,
-                defaultWorkspaceId: appDelegate.defaultWorkspaceId
-            )
-            let ingestor = EventIngestor(database: db, watcher: watcher)
-            appDelegate.jsonlWatcher = watcher
-            appDelegate.eventIngestor = ingestor
+        // M2.4:JSONLWatcher + EventIngestor + TimelineViewModel 正式启动。
+        // 不再 env-gated,每次 App 启动都起 —— 这是 Cairn 的核心能力。
+        // CAIRN_DEV_WATCH=1 仍保留为"额外 stderr 日志"模式,开发 debug 用。
+        guard let db = appDelegate.database else { return }
+        let root = URL(fileURLWithPath: "\(NSHomeDirectory())/.claude/projects")
+        let watcher = JSONLWatcher(
+            database: db,
+            projectsRoot: root,
+            defaultWorkspaceId: appDelegate.defaultWorkspaceId
+        )
+        let ingestor = EventIngestor(database: db, watcher: watcher)
+        let vm = TimelineViewModel(ingestor: ingestor)
 
-            // events() 必须先于 start() —— ingestor 需要先订阅,start 后 watcher
-            // 才能 emit(ingestor.start 内部订阅 watcher.events)。
+        // 双持:delegate(生命周期)+ @State(UI 观察)
+        appDelegate.jsonlWatcher = watcher
+        appDelegate.eventIngestor = ingestor
+        appDelegate.timelineVM = vm
+        self.timelineVM = vm  // ← 触发 SwiftUI 重渲 RightPanelView
+
+        // 顺序关键:vm.start 先订阅 ingestor;ingestor.start 再订阅 watcher;
+        // watcher.start 最后开始 emit。
+        await vm.start()
+        await ingestor.start()
+
+        // 可选 dev stderr 日志
+        if ProcessInfo.processInfo.environment["CAIRN_DEV_WATCH"] == "1" {
             let stream = await ingestor.events()
             Task {
                 var persistedCount = 0
@@ -277,20 +295,14 @@ struct CairnApp: App {
                     }
                 }
             }
+        }
 
-            // ⚠️ 顺序关键:ingestor.start 先——内部订阅 watcher.events()。
-            // 如果 watcher 先 start,已经 emit 的 .discovered 会丢。
-            await ingestor.start()
-            do {
-                try await watcher.start()
-                FileHandle.standardError.write(Data(
-                    "[Ingestor] watcher started on \(root.path)\n".utf8
-                ))
-            } catch {
-                FileHandle.standardError.write(Data(
-                    "[Ingestor] watcher start failed: \(error)\n".utf8
-                ))
-            }
+        do {
+            try await watcher.start()
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[Ingestor] watcher start failed: \(error)\n".utf8
+            ))
         }
     }
 }
