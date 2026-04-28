@@ -25,6 +25,8 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     weak var split: SplitCoordinator?
     /// M2.1 dev-only JSONLWatcher,由 CAIRN_DEV_WATCH=1 env var 在 initialize 里挂。
     var jsonlWatcher: JSONLWatcher?
+    /// M2.3 EventIngestor,同上 env var 挂。
+    var eventIngestor: EventIngestor?
 
     /// v1 defaultWorkspaceId:硬编码 UUID,跨启动稳定。M3.5 Workspace 管理
     /// 就位后替换为真实 workspace id。
@@ -65,6 +67,10 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
             saveLayoutNow(reason: "willTerminate")
             // watcher.stop() 是 async,会起 Task;进程即将退出,可能跑不完。
             // 但 cursor 每 chunk 已写盘,丢最后一块可接受(Known limitations)。
+            // ingestor.stop 先(停止消费 watcher.stream),再 watcher.stop。
+            if let ingestor = eventIngestor {
+                Task { await ingestor.stop() }
+            }
             if let watcher = jsonlWatcher {
                 Task { await watcher.stop() }
             }
@@ -231,9 +237,9 @@ struct CairnApp: App {
             )
         }
 
-        // M2.1 dev-only harness:CAIRN_DEV_WATCH=1 启动 JSONLWatcher 并 stderr
-        // 打印事件流。不接 UI,不写 events 表 —— 只验证 watcher 在真实 Claude
-        // session 上跑得起来。M2.3 才真正接入 ingestor。
+        // M2.3 dev-only harness:CAIRN_DEV_WATCH=1 启动 JSONLWatcher + EventIngestor
+        // 端到端跑,stderr 打印入库进度。真实 Claude session 的 events 会持久化
+        // 到 SQLite events 表,供 M2.4 UI 消费(当前仅计数日志)。
         if ProcessInfo.processInfo.environment["CAIRN_DEV_WATCH"] == "1",
            let db = appDelegate.database {
             let root = URL(fileURLWithPath: "\(NSHomeDirectory())/.claude/projects")
@@ -242,35 +248,47 @@ struct CairnApp: App {
                 projectsRoot: root,
                 defaultWorkspaceId: appDelegate.defaultWorkspaceId
             )
+            let ingestor = EventIngestor(database: db, watcher: watcher)
             appDelegate.jsonlWatcher = watcher
-            // events() 必须在 start() 之前订阅,否则漏 .discovered 初始事件。
-            let stream = await watcher.events()
+            appDelegate.eventIngestor = ingestor
+
+            // events() 必须先于 start() —— ingestor 需要先订阅,start 后 watcher
+            // 才能 emit(ingestor.start 内部订阅 watcher.events)。
+            let stream = await ingestor.events()
             Task {
+                var persistedCount = 0
                 for await event in stream {
                     switch event {
-                    case .discovered(let s):
+                    case .persisted:
+                        persistedCount += 1
+                        if persistedCount.isMultiple(of: 100) {
+                            FileHandle.standardError.write(Data(
+                                "[Ingestor] persisted \(persistedCount) events\n".utf8
+                            ))
+                        }
+                    case .restored(let sid, let events):
                         FileHandle.standardError.write(Data(
-                            "[JSONLWatcher] discovered \(s.id) at \(s.jsonlPath)\n".utf8
+                            "[Ingestor] restored \(events.count) events for \(sid)\n".utf8
                         ))
-                    case .lines(let sid, let ls, let start, _):
+                    case .error(let sid, let start, let err):
                         FileHandle.standardError.write(Data(
-                            "[JSONLWatcher] +\(ls.count) lines for \(sid) (from #\(start))\n".utf8
-                        ))
-                    case .removed(let sid):
-                        FileHandle.standardError.write(Data(
-                            "[JSONLWatcher] removed \(sid)\n".utf8
+                            "[Ingestor] error on \(sid) from #\(start): \(err)\n".utf8
                         ))
                     }
                 }
             }
+
+            // ⚠️ 顺序关键:ingestor.start 先——内部订阅 watcher.events()。
+            // 如果 watcher 先 start,已经 emit 的 .discovered 会丢。
+            await ingestor.start()
             do {
                 try await watcher.start()
                 FileHandle.standardError.write(Data(
-                    "[JSONLWatcher] started on \(root.path)\n".utf8
+                    "[Ingestor] watcher started on \(root.path)\n".utf8
                 ))
             } catch {
                 FileHandle.standardError.write(Data(
-                    "[JSONLWatcher] start failed: \(error)\n".utf8
+                    "[Ingestor] watcher start failed: \(error)\n".utf8
                 ))
             }
         }
