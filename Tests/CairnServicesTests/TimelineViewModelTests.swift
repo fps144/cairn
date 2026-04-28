@@ -75,6 +75,78 @@ final class TimelineViewModelTests: XCTestCase {
         XCTAssertEqual(vm.events.count, 1)
     }
 
+    // MARK: - M2.5 toggle 测试
+
+    func test_toggle_flipsExpandedState() async throws {
+        let vm = try await makeVM()
+        let sid = UUID()
+        let use = Event(
+            sessionId: sid, type: .toolUse, category: .shell,
+            toolName: "Bash", toolUseId: "tu_1",
+            timestamp: Date(), lineNumber: 1, summary: "Bash"
+        )
+        vm.handleForTesting(.persisted(use))
+        let entry = vm.entries[0]
+        // toolCard 默认折叠
+        XCTAssertFalse(vm.isExpanded(entry))
+        vm.toggle(entry.id)
+        XCTAssertTrue(vm.isExpanded(entry))
+        vm.toggle(entry.id)
+        XCTAssertFalse(vm.isExpanded(entry))
+    }
+
+    func test_isExpanded_defaultRules() async throws {
+        let vm = try await makeVM()
+        let sid = UUID()
+        // userMessage 默认展开(非可折叠)
+        let user = Event(sessionId: sid, type: .userMessage,
+                         timestamp: Date(), lineNumber: 1, summary: "hi")
+        vm.handleForTesting(.persisted(user))
+        let userEntry = vm.entries.last!
+        XCTAssertTrue(vm.isExpanded(userEntry), "userMessage 默认展开")
+
+        // thinking 默认折叠
+        let think = Event(sessionId: sid, type: .assistantThinking,
+                          timestamp: Date(), lineNumber: 2, summary: "thinking...")
+        vm.handleForTesting(.persisted(think))
+        let thinkEntry = vm.entries.last!
+        XCTAssertFalse(vm.isExpanded(thinkEntry), "thinking 默认折叠")
+
+        // toolCard 默认折叠
+        let use = Event(sessionId: sid, type: .toolUse, category: .shell,
+                        toolName: "Bash", toolUseId: "tu_1",
+                        timestamp: Date(), lineNumber: 3, summary: "Bash")
+        vm.handleForTesting(.persisted(use))
+        let toolEntry = vm.entries.last!
+        XCTAssertFalse(vm.isExpanded(toolEntry), "toolCard 默认折叠")
+    }
+
+    func test_toggleExpandAll_expandsAllCollapsibles_thenCollapsesAll() async throws {
+        let vm = try await makeVM()
+        let sid = UUID()
+        let think = Event(sessionId: sid, type: .assistantThinking,
+                          timestamp: Date(), lineNumber: 1, summary: "t")
+        let use = Event(sessionId: sid, type: .toolUse, category: .shell,
+                        toolName: "Bash", toolUseId: "tu_1",
+                        timestamp: Date(), lineNumber: 2, summary: "B")
+        vm.handleForTesting(.persisted(think))
+        vm.handleForTesting(.persisted(use))
+
+        // 默认全折叠
+        XCTAssertFalse(vm.isExpanded(vm.entries[0]))
+        XCTAssertFalse(vm.isExpanded(vm.entries[1]))
+
+        // 第一次 toggleExpandAll → 全展开
+        vm.toggleExpandAll()
+        XCTAssertTrue(vm.isExpanded(vm.entries[0]))
+        XCTAssertTrue(vm.isExpanded(vm.entries[1]))
+
+        // 第二次 → 全折叠
+        vm.toggleExpandAll()
+        XCTAssertFalse(vm.isExpanded(vm.entries[0]))
+        XCTAssertFalse(vm.isExpanded(vm.entries[1]))
+    }
+
     func test_restored_prependsHistory_whenSessionMatches() async throws {
         let vm = try await makeVM()
         let sid = UUID()

@@ -16,6 +16,11 @@ import CairnClaude
 public final class TimelineViewModel {
     public private(set) var currentSessionId: UUID?
     public private(set) var events: [Event] = []
+    /// M2.5:折叠状态 —— entry.id 作为 key。
+    /// 只对**可折叠** entry(toolCard / mergedTools / thinking)生效;
+    /// 其他 entry 永远展开且不在这个集合里。
+    /// 折叠态不持久化(重开 app 回默认折叠)。
+    public private(set) var expandedIds: Set<UUID> = []
 
     private let ingestor: EventIngestor
     private var task: Task<Void, Never>?
@@ -42,6 +47,54 @@ public final class TimelineViewModel {
     public func stop() {
         task?.cancel()
         task = nil
+    }
+
+    // MARK: - M2.5 聚合视图 + 折叠控制
+
+    /// 聚合后的 timeline entries。每次读触发重算(events 百级下 O(N))。
+    public var entries: [TimelineEntry] {
+        TimelineAggregator.aggregate(events: events)
+    }
+
+    /// 单个 entry 的折叠 toggle。只对可折叠 entry 有意义。
+    public func toggle(_ id: UUID) {
+        if expandedIds.contains(id) {
+            expandedIds.remove(id)
+        } else {
+            expandedIds.insert(id)
+        }
+    }
+
+    /// ⌘⇧E:对所有可折叠 entry 生效。
+    /// 若所有可折叠 entry 都已展开 → 折叠所有;否则 → 展开所有。
+    public func toggleExpandAll() {
+        let toggableIds: Set<UUID> = Set(entries.compactMap { entry -> UUID? in
+            switch entry {
+            case .toolCard, .mergedTools:
+                return entry.id
+            case .single(let e) where e.type == .assistantThinking:
+                return e.id
+            default:
+                return nil
+            }
+        })
+        if !toggableIds.isEmpty, expandedIds.isSuperset(of: toggableIds) {
+            expandedIds.subtract(toggableIds)
+        } else {
+            expandedIds.formUnion(toggableIds)
+        }
+    }
+
+    /// UI 用:判断 entry 是否展开。对不可折叠 entry 永远返回 true。
+    public func isExpanded(_ entry: TimelineEntry) -> Bool {
+        switch entry {
+        case .toolCard, .mergedTools:
+            return expandedIds.contains(entry.id)
+        case .single(let e) where e.type == .assistantThinking:
+            return expandedIds.contains(e.id)
+        default:
+            return true
+        }
     }
 
     private func handle(_ ev: EventIngestor.IngestEvent) {
