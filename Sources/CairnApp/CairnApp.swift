@@ -9,9 +9,6 @@ struct CairnApp: App {
     @State private var showInspector: Bool = true
     @State private var split = SplitCoordinator()
 
-    /// M1.5 持久化:每次 @Observable 变化后 debounce 500ms 再写 DB
-    @State private var saveTask: Task<Void, Never>?
-
     /// v1 defaultWorkspaceId:**hardcoded UUID**(stable across launches)。
     /// 初稿用 `UUID()` 每次启动生成新 id,导致 LayoutStateDAO.fetch 永远查不到
     /// 上次保存的布局(都是新 key)—— 恢复完全失效。
@@ -32,10 +29,10 @@ struct CairnApp: App {
                 await initializeDatabase()
             }
             // Observable 变化触发保存 debounce
-            .onChange(of: split.groups.map { $0.tabs.count }) { _, _ in scheduleAutoSave() }
-            .onChange(of: split.groups.flatMap { $0.tabs }.map(\.cwd)) { _, _ in scheduleAutoSave() }
-            .onChange(of: split.groups.map { $0.activeTabId }) { _, _ in scheduleAutoSave() }
-            .onChange(of: split.activeGroupIndex) { _, _ in scheduleAutoSave() }
+            .onChange(of: split.groups.map { $0.tabs.count }) { _, _ in saveLayoutNow() }
+            .onChange(of: split.groups.flatMap { $0.tabs }.map(\.cwd)) { _, _ in saveLayoutNow() }
+            .onChange(of: split.groups.map { $0.activeTabId }) { _, _ in saveLayoutNow() }
+            .onChange(of: split.activeGroupIndex) { _, _ in saveLayoutNow() }
         })
         .defaultSize(width: 1280, height: 800)
         .windowToolbarStyle(.unified)
@@ -144,28 +141,28 @@ struct CairnApp: App {
 
     // MARK: - Persistence
 
-    /// 立即保存布局(初稿有 500ms debounce,app 退出前未完成的 task 会被
-    /// 取消,最后的改动丢失 —— 这是"开 tab 关 app 不恢复"的另一大元凶)。
-    /// 去掉 debounce,每次 onChange 都立即写 DB(SQLite upsert 小 JSON 行,
-    /// 开销可忽略,快速连续改动最多也就几次写)。
+    /// **同步**保存布局到 SQLite。
+    ///
+    /// 之前两版实现都假(500ms debounce 启动 async Task;后来去掉 debounce 但
+    /// 仍是 `Task { await upsert }`)—— SwiftUI App 在 Cmd+Q 时进程被立刻
+    /// 终止,pending Task **不会 resume**,最后一次 onChange 触发的 save
+    /// 静默丢失(磁盘 layout_states 表永远是空)。改用 `upsertSync`,在 onChange
+    /// 回调(MainActor)上直接同步写 SQLite。JSON 行很小,write 是 ms 级,
+    /// 主线程可接受;换来的是 Cmd+Q 前最后一次改动必然落盘。
     @MainActor
-    private func scheduleAutoSave() {
-        saveTask?.cancel()
-        let snapshot = LayoutSerializer.snapshot(from: split)
-        let wsId = defaultWorkspaceId
+    private func saveLayoutNow() {
         guard let db = database else { return }
-        saveTask = Task { @MainActor in
-            do {
-                let json = try LayoutSerializer.encode(snapshot)
-                try await LayoutStateDAO.upsert(
-                    workspaceId: wsId,
-                    layoutJson: json,
-                    updatedAt: Date(),
-                    in: db
-                )
-            } catch {
-                print("[CairnApp] layout save failed: \(error)")
-            }
+        let snapshot = LayoutSerializer.snapshot(from: split)
+        do {
+            let json = try LayoutSerializer.encode(snapshot)
+            try LayoutStateDAO.upsertSync(
+                workspaceId: defaultWorkspaceId,
+                layoutJson: json,
+                updatedAt: Date(),
+                in: db
+            )
+        } catch {
+            print("[CairnApp] layout save failed: \(error)")
         }
     }
 }
