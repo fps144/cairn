@@ -47,23 +47,25 @@ public final class TimelineViewModel {
     private func handle(_ ev: EventIngestor.IngestEvent) {
         switch ev {
         case .persisted(let e):
-            if currentSessionId == nil {
+            // **auto-switch 到最新 session**(M2.4 T12 用户反馈修订):
+            // 用户新开 tab 跑 claude 对话,期望 timeline 切换到新 session。
+            // 原 "锁定第一个 session" 让用户看不到新会话。
+            // 代价:startup 批量 ingest 494 个历史 session 时 UI 会瞬态跳动,
+            // 但很快稳定到最后一个 emit 的 session。M2.6 Tab↔Session 绑定后
+            // 用户可显式选定 session,此处 auto-switch 自然让位。
+            if e.sessionId != currentSessionId {
                 currentSessionId = e.sessionId
                 events = []
                 seenIds = []
             }
-            guard e.sessionId == currentSessionId else { return }
             guard !seenIds.contains(e.id) else { return }
             seenIds.insert(e.id)
             events.append(e)
 
         case .restored(let sid, let restoredEvents):
-            // restored 也可设定 current —— handleDiscovered 可能先 emit restored 再 persisted
-            if currentSessionId == nil {
-                currentSessionId = sid
-            }
+            // restored 只对 current session 生效 —— 历史事件 prepend。
+            // auto-switch 不触发(restored 只发生在 discover,不代表"新鲜"活动)。
             guard sid == currentSessionId else { return }
-            // 历史 events 按 (lineNumber, blockIndex) 排序,prepend
             let sorted = restoredEvents.sorted {
                 ($0.lineNumber, $0.blockIndex) < ($1.lineNumber, $1.blockIndex)
             }

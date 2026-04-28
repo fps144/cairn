@@ -46,20 +46,23 @@ final class TimelineViewModelTests: XCTestCase {
         XCTAssertEqual(vm.events.map(\.lineNumber), [1,2,3,4,5])
     }
 
-    func test_otherSessionIgnored() async throws {
+    func test_newSession_autoSwitches() async throws {
+        // M2.4 T12 修订:新 session 的 .persisted 到达时 auto-switch,
+        // 清空旧 events,用户新开 claude 对话能立刻在 timeline 看到。
         let vm = try await makeVM()
         let sid1 = UUID(), sid2 = UUID()
         vm.handleForTesting(.persisted(Event(
             sessionId: sid1, type: .userMessage,
             timestamp: Date(), lineNumber: 1, summary: "s1"
         )))
+        XCTAssertEqual(vm.currentSessionId, sid1)
         vm.handleForTesting(.persisted(Event(
             sessionId: sid2, type: .userMessage,
-            timestamp: Date(), lineNumber: 1, summary: "s2-ignored"
+            timestamp: Date(), lineNumber: 1, summary: "s2-new"
         )))
-        XCTAssertEqual(vm.currentSessionId, sid1)
+        XCTAssertEqual(vm.currentSessionId, sid2, "新 session 应 auto-switch")
         XCTAssertEqual(vm.events.count, 1)
-        XCTAssertEqual(vm.events[0].summary, "s1")
+        XCTAssertEqual(vm.events[0].summary, "s2-new")
     }
 
     func test_duplicateId_filtered() async throws {

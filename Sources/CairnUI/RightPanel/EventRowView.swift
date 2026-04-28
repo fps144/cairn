@@ -11,24 +11,33 @@ public struct EventRowView: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(EventStyleMap.icon(for: event))
-                .font(.system(size: 13))
-                .frame(width: 20, alignment: .center)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: EventStyleMap.symbol(for: event))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(EventStyleMap.tint(for: event))
+                .frame(width: 16, alignment: .center)
+                .accessibilityHidden(true)
 
             Text(event.summary)
                 .font(.system(.caption, design: .default))
-                .foregroundStyle(EventStyleMap.color(for: event))
+                .foregroundStyle(.primary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(Self.formatTime(event.timestamp))
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.tertiary)
+                .monospacedDigit()
         }
-        .padding(.vertical, 3)
-        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
+        // error 事件:轻微红色背景,视觉上一眼识别
+        .background(
+            event.type == .error
+                ? Color.red.opacity(0.08)
+                : Color.clear
+        )
     }
 
     private static let timeFormatter: DateFormatter = {
