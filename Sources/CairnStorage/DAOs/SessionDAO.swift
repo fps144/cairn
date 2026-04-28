@@ -46,15 +46,31 @@ public enum SessionDAO {
         in db: CairnDatabase
     ) async throws {
         try await db.write { db in
-            try db.execute(
-                sql: """
-                    UPDATE sessions
-                    SET byte_offset = ?, last_line_number = ?
-                    WHERE id = ?
-                """,
-                arguments: [byteOffset, lastLineNumber, sessionId.uuidString]
+            try Self.updateCursorSync(
+                sessionId: sessionId,
+                byteOffset: byteOffset,
+                lastLineNumber: lastLineNumber,
+                db: db
             )
         }
+    }
+
+    /// 同步版 cursor update,供 EventIngestor 在 `db.writeSync { ... }` 事务内调用。
+    /// 单事务批量 upsert events 后,同事务推进 cursor —— 原子保证。
+    public static func updateCursorSync(
+        sessionId: UUID,
+        byteOffset: Int64,
+        lastLineNumber: Int64,
+        db: GRDB.Database
+    ) throws {
+        try db.execute(
+            sql: """
+                UPDATE sessions
+                SET byte_offset = ?, last_line_number = ?
+                WHERE id = ?
+            """,
+            arguments: [byteOffset, lastLineNumber, sessionId.uuidString]
+        )
     }
 
     public static func fetch(id: UUID, in db: CairnDatabase) async throws -> Session? {

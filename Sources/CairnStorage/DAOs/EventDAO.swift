@@ -161,6 +161,17 @@ public enum EventDAO {
         return uuid
     }
 
+    /// 回写 tool_result 的 `paired_event_id`。在 upsertByLineBlock 之后、
+    /// tracker.observe 填完 id 之后调用(同事务内)。
+    public static func updatePairedEventIdSync(
+        eventId: UUID, pairedEventId: UUID?, db: GRDB.Database
+    ) throws {
+        try db.execute(
+            sql: "UPDATE events SET paired_event_id = ? WHERE id = ?",
+            arguments: [pairedEventId?.uuidString, eventId.uuidString]
+        )
+    }
+
     // MARK: - helpers
 
     private static func upsertSync(_ e: Event, db: GRDB.Database) throws {
