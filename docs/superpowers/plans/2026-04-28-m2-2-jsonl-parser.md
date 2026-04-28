@@ -105,6 +105,7 @@ fixture 内容**来自本机** `~/.claude/projects/-Users-sorain-xiaomi-projects
 | 18 | **fixture 不含敏感信息**(用户 prompt / 路径),需要时替换为占位 | 公共仓可见 |
 | 19 | 性能 smoke:1000 行混合 fixture,`measure {}` 块内 parse 单遍应 < 100ms | spec §8.5 M2.3 有 1000 行 500ms 要求;parser 层先定更严目标,留余量给 ingestor |
 | 20 | `JSONLParser` 暴露 `parse` 静态方法(纯函数);不提供 actor / stream 接口 | M2.3 ingestor 会用 AsyncStream 串起 watcher + parser + pairing + dao |
+| 21 | **tracker.observe 的 pairedEventId 指向 parser 当前生成的 UUID**(非 DB stable id) | parser 每次 parse 同一行生成新 UUID。M2.3 ingestor 的正确顺序**必须是**:① 先 `SessionDAO+EventDAO.upsert(event)` 按 `(sessionId, lineNumber, blockIndex)` 唯一约束换回 DB stable id,覆盖 `event.id`;② 再 `tracker.observe(events)`。否则 tool_result.paired_event_id 会指向不存在的 id。events 表 `paired_event_id` 无 FK(schema 故意如此),不会立即崩,但 UI 关联会失败。M2.2 plan **写入 Known limitations**,M2.3 必须实现此顺序 |
 
 ---
 
@@ -358,7 +359,15 @@ public struct JSONLEntry {
         guard let type = obj["type"] as? String else {
             throw ParseError.missingType
         }
-        let timestamp = (obj["timestamp"] as? String).flatMap { ISO8601DateFormatter.shared.date(from: $0) }
+        let timestamp: Date? = {
+            guard let s = obj["timestamp"] as? String else { return nil }
+            // 真实 Claude JSONL timestamp 两种格式并存:
+            //   "2024-01-02T03:04:05.123Z"(含毫秒)
+            //   "2024-01-02T03:04:05Z"(不含)
+            // 只配一个 formatter 会漏解其中一种,回落到另一种。
+            if let d = ISO8601DateFormatter.withFractional.date(from: s) { return d }
+            return ISO8601DateFormatter.basic.date(from: s)
+        }()
         return JSONLEntry(
             type: type,
             parentUuid: obj["parentUuid"] as? String,
@@ -373,11 +382,16 @@ public struct JSONLEntry {
     }
 }
 
-// 统一 ISO8601 解码器
+// 统一 ISO8601 解码器(两个,对应两种真实格式)
 private extension ISO8601DateFormatter {
-    static let shared: ISO8601DateFormatter = {
+    static let withFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    static let basic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
         return f
     }()
 }
@@ -438,12 +452,15 @@ public enum JSONLParser {
              "progress", "attachment", "file-history-snapshot",
              "permission-mode", "last-prompt", "queue-operation",
              "agent-name", "tag":
-            return []  // 忽略
+            events = []  // 忽略类型:无 content 事件,但**仍走下面 compact 派生**
+                        // —— spec §4.3 "parentUuid == null 非首行 → compact_boundary"
+                        // 与 entry type 正交。attachment/system 有 parentUuid 字段,
+                        // 刚 compact 后的那条 entry 无论什么 type 都应派生 boundary。
         default:
             FileHandle.standardError.write(Data(
                 "[JSONLParser] unknown type '\(entry.type)' line #\(lineNumber)\n".utf8
             ))
-            return []
+            return []  // 未知 type 视为完全不处理,不派生 compact(避免垃圾数据乱派生)
         }
 
         // T6 派生事件
@@ -754,6 +771,12 @@ import CairnCore
 
 /// 维护 tool_use ↔ tool_result 的 in-memory 配对关系。
 /// 重启后 DB 重建由 M2.3 EventIngestor 调用 `restore(from:)` 完成。
+///
+/// **⚠️ id 稳定性约束**:observe 里 inflight 存的是**传入 event 的 id**。
+/// 如果 caller 先做 DB upsert 把 Event.id 替换成 stable 值再调 observe,
+/// 配对后的 pairedEventId 才能指向 DB 里真实存在的 row。M2.3 EventIngestor
+/// **必须**按此顺序调度,否则 tool_result.paired_event_id 指向不存在的 id。
+/// M2.2 范围只保证"同一 parser 流里 tool_use→tool_result id 一致"。
 public actor ToolPairingTracker {
     private var inflight: [String: UUID] = [:]  // toolUseId → tool_use Event.id
 
@@ -895,8 +918,13 @@ final class JSONLParserTests: XCTestCase {
     private let sid = UUID()
 
     private func loadFixture(_ name: String) throws -> [String] {
-        let url = Bundle.module.url(forResource: name, withExtension: "jsonl",
-                                    subdirectory: "fixtures")!
+        // ⚠️ subdirectory 必须含完整相对路径。Package.swift 里
+        // `.copy("Parser/fixtures")` 保留路径,bundle 内资源在 Parser/fixtures/
+        // 下,不是扁平的 fixtures/。只写 "fixtures" 会 nil!
+        let url = Bundle.module.url(
+            forResource: name, withExtension: "jsonl",
+            subdirectory: "Parser/fixtures"
+        )!
         let content = try String(contentsOf: url, encoding: .utf8)
         return content.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
     }
@@ -928,9 +956,12 @@ final class JSONLParserTests: XCTestCase {
 
     func test_assistantText() throws {
         let events = try parseFirst("assistant-text")
-        // text + api_usage
-        XCTAssertTrue(events.contains { $0.type == .assistantText })
-        XCTAssertTrue(events.contains { $0.type == .apiUsage })
+        // 严格 count:text(block 0)+ api_usage(派生) = 2
+        XCTAssertEqual(events.count, 2, "got types \(events.map(\.type))")
+        XCTAssertEqual(events[0].type, .assistantText)
+        XCTAssertEqual(events[0].blockIndex, 0)
+        XCTAssertEqual(events[1].type, .apiUsage)
+        XCTAssertEqual(events[1].blockIndex, 1)
     }
 
     func test_assistantThinking() throws {
@@ -1248,6 +1279,7 @@ swift test --filter "test_localRealSession_parses" 2>&1 | grep "M2.2 smoke"
 ## Known limitations(留给后续 milestone)
 
 - **事件不落盘**:本 milestone 只解析,parser 输出被丢弃;M2.3 加 EventIngestor 做批量事务写 events 表
+- **pairedEventId 不是 DB stable id**:parser 每次 parse 同一行生成新 UUID;tracker.observe 用 parser UUID 填 pairedEventId。M2.3 EventIngestor **必须先 DAO upsert 用 `(sessionId, lineNumber, blockIndex)` 唯一约束换回 DB stable id、覆盖 `event.id`,再调 tracker.observe**。否则 tool_result.paired_event_id 指向不存在的 id(events 表 schema 故意不加 FK,不会崩但 UI 关联失败)。这个顺序是 M2.3 的硬约束,写在 M2.3 plan 开头提醒
 - **cross-entry 配对**:`ToolPairingTracker` 只管单 session 内的 tool_use/result;跨 session 的配对语义 Anthropic 不支持,不需要做
 - **重启 DB 重建**:`restore(from:)` 接口定义了,但真正从 DB 读 Events 喂进来的集成在 M2.3
 - **is_error 语义细化**:有的 is_error 代表真错误,有的代表用户 Ctrl+C;M2.4 Timeline 再区分
