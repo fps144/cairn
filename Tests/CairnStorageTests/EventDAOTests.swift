@@ -102,6 +102,44 @@ final class EventDAOTests: XCTestCase {
         XCTAssertEqual(errors.map(\.id), [err.id])
     }
 
+    // MARK: - M2.3 upsertByLineBlock
+
+    func test_upsertByLineBlock_insertReturnsNewId() async throws {
+        let e = Event(sessionId: sessionId, type: .userMessage,
+                      timestamp: ts0, lineNumber: 1, blockIndex: 0, summary: "hi")
+        let returnedId = try await db.write { db in
+            try EventDAO.upsertByLineBlockSync(e, db: db)
+        }
+        XCTAssertEqual(returnedId, e.id, "首次 insert 返回 parser 的 id")
+        let fetched = try await EventDAO.fetch(id: e.id, in: db)
+        XCTAssertNotNil(fetched)
+    }
+
+    func test_upsertByLineBlock_conflictReturnsStableId() async throws {
+        let first = Event(sessionId: sessionId, type: .userMessage,
+                          timestamp: ts0, lineNumber: 1, blockIndex: 0,
+                          summary: "first")
+        let firstReturned = try await db.write { db in
+            try EventDAO.upsertByLineBlockSync(first, db: db)
+        }
+
+        // 同 (sid, line, block) 但 id 不同(模拟 parser 重 parse 生成新 UUID)
+        let second = Event(id: UUID(),  // 显式新 UUID
+                           sessionId: sessionId, type: .userMessage,
+                           timestamp: ts0, lineNumber: 1, blockIndex: 0,
+                           summary: "updated")
+        XCTAssertNotEqual(second.id, first.id)
+        let secondReturned = try await db.write { db in
+            try EventDAO.upsertByLineBlockSync(second, db: db)
+        }
+        XCTAssertEqual(secondReturned, firstReturned,
+                       "conflict 应返回原 row 的 stable id,不是 second.id")
+
+        // summary 字段被覆盖
+        let fetched = try await EventDAO.fetch(id: firstReturned, in: db)
+        XCTAssertEqual(fetched?.summary, "updated")
+    }
+
     func test_delete_cascadesFromSession() async throws {
         let event = Event(sessionId: sessionId, type: .userMessage,
                           timestamp: ts0, lineNumber: 1, summary: "hi")

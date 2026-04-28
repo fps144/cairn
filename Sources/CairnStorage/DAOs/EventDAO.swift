@@ -3,6 +3,11 @@ import GRDB
 import CairnCore
 
 public enum EventDAO {
+    public enum DAOError: Error {
+        case noRowReturned(String)
+        case invalidUUID(String)
+    }
+
     public static func upsert(_ event: Event, in db: CairnDatabase) async throws {
         try await db.write { db in
             try Self.upsertSync(event, db: db)
@@ -95,6 +100,65 @@ public enum EventDAO {
                 arguments: [id.uuidString]
             )
         }
+    }
+
+    /// 按 `(session_id, line_number, block_index)` 复合键 upsert,返回 DB stable id。
+    ///
+    /// M2.3 EventIngestor 用:parser 生成的 Event.id 是随机 UUID,每次 parse
+    /// 不同;但 events 表里同一个 (sid, line, block) 必须有稳定 id 供
+    /// `paired_event_id` 指向。SQLite UPSERT + RETURNING 一步完成。
+    ///
+    /// - 已存在 row:用 excluded 字段覆盖**非 id** 字段,id 保持旧值
+    /// - 不存在:插入 Event.id 作为新 stable id
+    ///
+    /// 返回值:DB 里这行的 id(caller 用 `Event.withId(_:)` 覆盖)。
+    /// **依赖 schema v2 的 `UNIQUE INDEX idx_events_session_seq`**。
+    public static func upsertByLineBlockSync(
+        _ e: Event, db: GRDB.Database
+    ) throws -> UUID {
+        guard let row = try Row.fetchOne(
+            db,
+            sql: """
+                INSERT INTO events
+                (id, session_id, type, category, tool_name, tool_use_id,
+                 paired_event_id, timestamp, line_number, block_index,
+                 summary, raw_payload_json, byte_offset_in_jsonl)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, line_number, block_index) DO UPDATE SET
+                    type = excluded.type,
+                    category = excluded.category,
+                    tool_name = excluded.tool_name,
+                    tool_use_id = excluded.tool_use_id,
+                    paired_event_id = excluded.paired_event_id,
+                    timestamp = excluded.timestamp,
+                    summary = excluded.summary,
+                    raw_payload_json = excluded.raw_payload_json,
+                    byte_offset_in_jsonl = excluded.byte_offset_in_jsonl
+                RETURNING id
+                """,
+            arguments: [
+                e.id.uuidString,
+                e.sessionId.uuidString,
+                e.type.rawValue,
+                e.category?.rawValue,
+                e.toolName,
+                e.toolUseId,
+                e.pairedEventId?.uuidString,
+                ISO8601.string(from: e.timestamp),
+                e.lineNumber,
+                e.blockIndex,
+                e.summary,
+                e.rawPayloadJson,
+                e.byteOffsetInJsonl,
+            ]
+        ) else {
+            throw DAOError.noRowReturned("upsertByLineBlock")
+        }
+        let idStr: String = row["id"]
+        guard let uuid = UUID(uuidString: idStr) else {
+            throw DAOError.invalidUUID(idStr)
+        }
+        return uuid
     }
 
     // MARK: - helpers
