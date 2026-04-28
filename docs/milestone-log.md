@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M2.1 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
+- [ ] M2.2 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
@@ -36,6 +36,51 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.1 JSONLWatcher — FSEvents + vnode + 30s reconcile 三层兜底
+
+**Completed**: 2026-04-28
+**Tag**: `m2-1-done`
+**Commits**: 12 个(`846c430` probe 笔记 / `fe9c532` IncrementalReader / `26c147b` VnodeWatcher / `ecaca15` FSEventsWatcher / `d6b8bd4` SessionRegistry+Reconciler+ProjectsDirLayout / `c12157c` JSONLWatcher 总装 / `75c8898` dev harness + scaffold bump / `23e6e82` stableUUID + startup reconcile 修)
+
+**Summary**:
+- CairnClaude 新增 `Watcher/` 子目录,6 文件单一职责拆:`IncrementalReader`(纯函数 byte-offset 读) / `VnodeWatcher`(DispatchSourceFileSystemObject) / `FSEventsWatcher`(C API) / `SessionRegistry`(actor 内存索引) / `Reconciler`(30s ticker) / `JSONLWatcher`(actor 总装)+ `ProjectsDirLayout`(hash 工具)
+- spec §4.2 三层兜底:FSEvents(根目录发现) + per-file vnode(精确触发) + 30s reconcile(全量补漏),外加 startup reconcile(启动即跑一次,不等 30s)
+- 对外 API:`JSONLWatcher.events() -> AsyncStream<WatcherEvent>`,三种 case `.discovered(Session)` / `.lines(sessionId, [String], lineNumberStart)` / `.removed(sessionId)`。多订阅 fanout(用 `AsyncStream.makeStream`)
+- **严格范围控制**:不解析 JSONL(M2.2 parser)、不写 events 表(M2.3 ingestor)、不接 UI(M2.4)
+- 143 单测(原 120 + M2.1 新 23)全绿
+- 真实验证:本机 494 个历史 session 全部 discover + ingest,cursor 跨启动 100% 复用(第二次启动仅 15 行新 lines)
+
+**架构合规**(spec §3.2):CairnClaude 只依赖 CairnCore + CairnStorage;CairnApp 新增 CairnClaude 依赖用于 dev harness;UI 层未触及。
+
+**执行阶段修正 / 偏离 plan 的 6 处**:
+1. **FSEvents C API 必须加 `kFSEventStreamCreateFlagUseCFTypes`** —— 不加时 eventPaths 是 `char**`,Swift 强转 NSArray SIGTRAP 崩(plan 里漏了这个 flag,执行时 signal 5 定位)
+2. **atomic write 触发 Renamed 不是 Created** —— macOS `FileManager.createFile` / `String.write(atomically:true)` 都走 tmp+rename,FSEvents 事件是 Renamed。改 FSEventsWatcher 按 path 存在性把 Renamed 映射到 `.created`/`.removed`,统一语义
+3. **plan 自检修好的严重 bug `discover` 覆盖 cursor** —— 这版已预防:先 `SessionDAO.fetch(id:)`,有就复用,避免 `ON CONFLICT DO UPDATE` 把 byte_offset 重置为 0
+4. **plan 自检修好的编译错 `events()` actor 隔离违反** —— 这版用 `AsyncStream.makeStream(of:)`
+5. **stable UUID 派生**(T12 实测后补的):subagents 子目录下 JSONL 文件名是 `agent-xxx.jsonl` 不是 UUID 格式,`UUID(uuidString:)` fallback `UUID()` 每次随机 → cursor 持久化对这类文件完全失效。用 `SHA256(path)` 前 16 字节派生 v4 格式稳定 UUID,同 path 同 id
+6. **startup reconcile**(T12 实测后补的):discover 后不主动 ingest,历史 session 要等 30s reconcile tick 才读。`start()` 末尾跑一次 `runReconcile()`,启动即全量 ingest
+
+**关键设计决策**(plan pinned,24 条):
+- 每组件一个文件,单一职责(spec §3.2)
+- `IncrementalReader` 纯函数;"永远不读半行"统一 `removeLast()` 处理 trailing \n 边界
+- `FSEventsWatcher` / `VnodeWatcher` 单订阅(覆盖 continuation)—— 由 JSONLWatcher 单持有,无影响
+- `JSONLWatcher.events()` 多订阅 fanout,**必须在 start() 之前订阅**(否则漏 `.discovered`)
+- cursor 每次 ingest 立即写 DB(async,极端情况丢最后一 chunk 可接受,M2.3 ingestor idempotent 兜底)
+- session workspace 归属 M2.1 简化为 default;M2.6 用 system.cwd 精确映射
+
+**Acceptance**: T13 验收清单(用户 + Claude 均跑通 5 项核心指标),详见 `docs/superpowers/plans/2026-04-28-m2-1-jsonl-watcher.md`。
+
+**Known limitations**:
+- **workspace 反推**: session 一律挂到 default workspace(M2.6 升级)
+- **session 生命周期**:只维护 `.live`,`.ended`/`.abandoned`/`.crashed` 留 M2.6
+- **FSEvents 只看未来**:历史 JSONL 靠启动时 `scanExisting` 一次性加载,500+ session 下启动略重(M2.7 懒加载优化)
+- **cursor 写频率**:每 chunk 一次 upsert(M2.7 视负载合批)
+- **Cursor 丢最后一 chunk**:Cmd+Q 瞬间 async updateCursor 中断可能丢;下次启动 reconcile 发现 size > offset 会重读,M2.3 ingestor 必须对 event 去重
+- **SwiftLog**:用 stderr 直写(M2.7 统一)
+- **UI 不接**:本 milestone 只发流,无 UI 消费(M2.4)
+
+---
 
 ### M1.5 水平分屏 + OSC 7 cwd 跟踪 + 布局 SQLite 持久化
 
