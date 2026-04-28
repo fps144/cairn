@@ -6,8 +6,8 @@ final class CairnStorageTests: XCTestCase {
     func test_scaffoldVersion_matchesCore() {
         // CairnStorage.scaffoldVersion 与 CairnCore.scaffoldVersion 相等
         XCTAssertEqual(CairnStorage.scaffoldVersion,
-                       "0.5.0-m1.5",
-                       "M1.5 bump 到 0.5.0-m1.5")
+                       "0.6.0-m2.1",
+                       "M2.1 bump 到 0.6.0-m2.1")
     }
 
     func test_inMemoryDatabase_opensAndClosesCleanly() async throws {

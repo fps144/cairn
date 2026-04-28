@@ -4,6 +4,7 @@ import CairnCore
 import CairnUI
 import CairnTerminal
 import CairnStorage
+import CairnClaude
 
 /// AppKit 代理。单一持久化入口:持有 `database` + `split` 引用,
 /// 暴露 `saveLayoutNow()` 给 SwiftUI onChange 和 `applicationWillTerminate`。
@@ -22,6 +23,8 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     var database: CairnDatabase?
     /// SplitCoordinator 由 App 在 .task 里注入;delegate 弱引用以免循环持有。
     weak var split: SplitCoordinator?
+    /// M2.1 dev-only JSONLWatcher,由 CAIRN_DEV_WATCH=1 env var 在 initialize 里挂。
+    var jsonlWatcher: JSONLWatcher?
 
     /// v1 defaultWorkspaceId:硬编码 UUID,跨启动稳定。M3.5 Workspace 管理
     /// 就位后替换为真实 workspace id。
@@ -60,6 +63,11 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             saveLayoutNow(reason: "willTerminate")
+            // watcher.stop() 是 async,会起 Task;进程即将退出,可能跑不完。
+            // 但 cursor 每 chunk 已写盘,丢最后一块可接受(Known limitations)。
+            if let watcher = jsonlWatcher {
+                Task { await watcher.stop() }
+            }
         }
     }
 }
@@ -221,6 +229,50 @@ struct CairnApp: App {
                     split?.handleTabTerminated(tabId: tabId)
                 }
             )
+        }
+
+        // M2.1 dev-only harness:CAIRN_DEV_WATCH=1 启动 JSONLWatcher 并 stderr
+        // 打印事件流。不接 UI,不写 events 表 —— 只验证 watcher 在真实 Claude
+        // session 上跑得起来。M2.3 才真正接入 ingestor。
+        if ProcessInfo.processInfo.environment["CAIRN_DEV_WATCH"] == "1",
+           let db = appDelegate.database {
+            let root = URL(fileURLWithPath: "\(NSHomeDirectory())/.claude/projects")
+            let watcher = JSONLWatcher(
+                database: db,
+                projectsRoot: root,
+                defaultWorkspaceId: appDelegate.defaultWorkspaceId
+            )
+            appDelegate.jsonlWatcher = watcher
+            // events() 必须在 start() 之前订阅,否则漏 .discovered 初始事件。
+            let stream = await watcher.events()
+            Task {
+                for await event in stream {
+                    switch event {
+                    case .discovered(let s):
+                        FileHandle.standardError.write(Data(
+                            "[JSONLWatcher] discovered \(s.id) at \(s.jsonlPath)\n".utf8
+                        ))
+                    case .lines(let sid, let ls, let start):
+                        FileHandle.standardError.write(Data(
+                            "[JSONLWatcher] +\(ls.count) lines for \(sid) (from #\(start))\n".utf8
+                        ))
+                    case .removed(let sid):
+                        FileHandle.standardError.write(Data(
+                            "[JSONLWatcher] removed \(sid)\n".utf8
+                        ))
+                    }
+                }
+            }
+            do {
+                try await watcher.start()
+                FileHandle.standardError.write(Data(
+                    "[JSONLWatcher] started on \(root.path)\n".utf8
+                ))
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "[JSONLWatcher] start failed: \(error)\n".utf8
+                ))
+            }
         }
     }
 }
