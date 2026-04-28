@@ -8,7 +8,7 @@ final class CairnCoreTests: XCTestCase {
 
     func test_scaffoldVersion_containsMilestoneTag() {
         XCTAssertTrue(
-            CairnCore.scaffoldVersion.contains("m2.3"),
+            CairnCore.scaffoldVersion.contains("m2.4"),
             "版本字符串应包含当前 milestone 标识,实际是 \(CairnCore.scaffoldVersion)"
         )
     }
