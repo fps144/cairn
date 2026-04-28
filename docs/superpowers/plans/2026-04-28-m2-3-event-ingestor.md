@@ -30,14 +30,15 @@
 | T1. Schema v2 migration:events 加 UNIQUE(sid, line, block) + migrator 注册 | Claude | — |
 | T2. EventDAO `upsertByLineBlock`(ON CONFLICT 复合键,RETURNING id) | Claude | T1 |
 | T3. `SessionDAO.updateCursorSync`(如果不存在)| Claude | — |
-| T4. `EventIngestor` actor 骨架 + start/stop + AsyncStream 对外 | Claude | T2,T3 |
+| **T3b. `ToolPairingTracker` actor → class**(M2.2 breaking change;让 observe 能在 db.writeSync 闭包内同步调) | Claude | — |
+| T4. `EventIngestor` actor 骨架 + start/stop + AsyncStream 对外 | Claude | T2,T3,T3b |
 | T5. Ingestor 处理 `.discovered` 事件(tracker restore + emit 既有 events) | Claude | T4 |
-| T6. Ingestor 处理 `.lines` 事件(parse → upsert → observe → updatePaired → updateCursor 单事务) | Claude | T4,T5 |
+| T6. Ingestor 处理 `.lines` 事件(**单事务**:parse → upsert → observe → updatePaired → updateCursor) | Claude | T4,T5 |
 | T7. Ingestor 处理 `.removed` 事件(tracker 清理,cursor 保持) | Claude | T4 |
 | T8. EventDAO.updatePairedEventId(tool_result 配对回填) | Claude | T1 |
 | T9. `EventIngestorTests` 集成测试(5+):端到端 tmp JSONL → events 表 | Claude | T4-T8 |
 | T10. 性能压测:1000 行 append,事务 < 500ms(spec §8.5 硬指标) | Claude | T4-T8 |
-| T11. 改 CAIRN_DEV_WATCH=1 harness 用 EventIngestor 代替裸 watcher,打印 events 入库计数 | Claude | T4 |
+| T11. 改 CAIRN_DEV_WATCH=1 harness 用 EventIngestor 代替裸 watcher,打印 events 入库计数(**注意 start 顺序:ingestor 先于 watcher**) | Claude | T4 |
 | T12. scaffold bump `0.7.0-m2.2` → `0.8.0-m2.3` | Claude | — |
 | T13. 全测试 + 真实 Claude session 触发 + 验收 | Claude | T1-T12 |
 | T14. 用户验收 | **用户** | T13 |
@@ -78,7 +79,7 @@ Tests/CairnClaudeTests/Ingestor/
 | 1 | **Schema v2 加 UNIQUE(session_id, line_number, block_index)** | M2.2 遗留:parser 每次生成新 UUID,需要复合键冲突 upsert 换回 stable id |
 | 2 | 用 `INSERT ... ON CONFLICT(...) DO UPDATE ... RETURNING id` | SQLite 3.35+ 支持,GRDB 7.x 直通;一句 SQL 完成 upsert + 返回 stable id |
 | 3 | `EventDAO.upsertByLineBlock` 返回 DB stable id,caller 用它覆盖 `Event.id` | 配合 M2.2 tracker.observe 的 id 稳定性约束 |
-| 4 | **单事务批量**:一批 lines 一次 `db.writeSync { ... }`,包含:所有 event upsert + cursor update | 原子性:崩溃要么全 commit 要么全 rollback,避免半写 |
+| 4 | **单事务批量**:一批 lines 一次 `db.writeSync { ... }`,包含:**upsertByLineBlock → tracker.observe(sync)→ updatePairedEventId → updateCursor 全部**。tracker 改为 class 让 observe 在 sync 闭包内可调 | 原子性:崩溃要么全 commit 要么全 rollback;避免"事务 1 写了 tool_result 但 pairedEventId 还没回填,下次启动 tracker.restore 无法修复"的孤儿(restore 看 tool_result 已入库就认为配对了,其实 DB 里 paired=null) |
 | 5 | 批大小 = watcher 发过来的一个 `.lines` event(通常一次 vnode 触发读到的行)| 动态,无固定 chunk;大文件 IncrementalReader 按 1MB 分,自然分批 |
 | 6 | cursor 用同步 write(`SessionDAO.updateCursorSync`) | M1.5 / M2.1 已有 async/sync 双版本;事务内必须同步,不能 await |
 | 7 | `.discovered` 触发 tracker restore:查 DB 该 session 已有 events → `tracker.restore(from:)` | 跨启动配对重建;spec §4.4 "重启:从 DB 重建未配对 inflight" |
@@ -93,8 +94,9 @@ Tests/CairnClaudeTests/Ingestor/
 | 16 | Migrator 严格 foreignKeyChecks:migration 前后 FK 都校验通过 | GRDB 默认;events.session_id 已 FK |
 | 17 | Schema v2 migration **不迁移 events 表数据**(本机 events 表当前是空;生产 v0.1 Beta 之前无用户数据)| 零破坏;加 unique 约束后老行(若有)可能冲突,但当前无老行 |
 | 18 | `upsertByLineBlock` 的 ON CONFLICT DO UPDATE **只更新非 id 字段** | id 是 stable,不动;其他字段(summary/category/pairedEventId 等)用 excluded 覆盖 |
-| 19 | pairedEventId 的 **两步写入**:第一步 upsertByLineBlock 时 pairedEventId 可能为 nil(tool_result 还没被 tracker.observe);第二步 observe 后调 `updatePairedEventId` UPDATE 回写 | 一次 insert 原子拿 stable id + 一次 UPDATE 填配对,事务内两步完成 |
+| 19 | pairedEventId 的 **两步 SQL**(同一事务内):第一步 upsertByLineBlock 时 pairedEventId=nil(tool_result 还没 observe);第二步 observe 后 UPDATE 回写。**必须同事务**,不是两事务 | 同事务保证原子。tracker 改 class 才能在 db.writeSync sync 闭包里调 observe |
 | 20 | 测试里 EventIngestor.stop() 必须等所有 pending Task 完成后再退出 | 避免 test cleanup 时 DAO 还在写 → 测试间相互污染 |
+| 21 | **harness / 测试的 start 顺序:`ingestor.start()` 先于 `watcher.start()`** | ingestor.start 内部订阅 watcher.events();如果 watcher 先 start 就已经 emit,ingestor 还没注册 continuation 会漏 `.discovered` 初始事件 |
 
 ---
 
@@ -168,15 +170,18 @@ Task {
 
 **Files**:
 - Create: `Sources/CairnStorage/Schema/SchemaV2.swift`
-- Modify: `Sources/CairnStorage/Schema/SchemaMigrator.swift`(查确切文件名)
+- Modify: migrator 入口文件(T1 Step 1 grep 定位)
 
-- [ ] **Step 1: 找 migrator 入口**
+- [ ] **Step 1: 找 migrator 入口 + 确认 events 表当前状态**
 
 ```bash
 grep -rn "makeMigrator\|registerMigration" Sources/CairnStorage/ | head -10
-```
+# 找到 makeMigrator() 方法所在文件(M1.2 创建),记下文件名和现有 migration id 风格
 
-找到 `makeMigrator()` 方法所在文件(M1.2 创建)。
+# 确认生产 events 表当前是空的(加 UNIQUE INDEX 不会因历史重复数据冲突)
+sqlite3 "$HOME/Library/Application Support/Cairn/cairn.sqlite" "SELECT COUNT(*) FROM events;"
+# 期望:0
+```
 
 - [ ] **Step 2: 实现 V2 migration**
 
@@ -415,7 +420,145 @@ git commit -m "feat(storage): SessionDAO.updateCursorSync for in-transaction cur
 
 ---
 
-### Task 4: EventIngestor actor 骨架
+### Task 3b: ToolPairingTracker actor → class(M2.2 breaking change)
+
+**Files**:
+- Modify: `Sources/CairnClaude/Parser/ToolPairingTracker.swift`
+- Modify: `Tests/CairnClaudeTests/Parser/ToolPairingTrackerTests.swift`
+
+**为什么改**:M2.3 需要在 `db.writeSync { ... }` 的 **同步** 闭包内调 `tracker.observe`,以实现单事务(upsert → observe → updatePaired → updateCursor)。actor 的 method 外部调用都是 async,在 sync 闭包内无法 `await`。把 Tracker 改成 thread-safe `final class`,observe / restore / inflightCount 全部同步。
+
+**线程安全**:Tracker 只被 EventIngestor actor(本身 serial)调用,无并发访问,class 无需锁。但为了防御性加 `NSLock` 免得未来共享。
+
+- [ ] **Step 1: 给 Event 加 helpers**(Tracker observe 依赖)
+
+```swift
+// Sources/CairnCore/Event.swift 追加
+extension Event {
+    public func withId(_ newId: UUID) -> Event {
+        return Event(
+            id: newId, sessionId: sessionId, type: type, category: category,
+            toolName: toolName, toolUseId: toolUseId, pairedEventId: pairedEventId,
+            timestamp: timestamp, lineNumber: lineNumber, blockIndex: blockIndex,
+            summary: summary, rawPayloadJson: rawPayloadJson,
+            byteOffsetInJsonl: byteOffsetInJsonl
+        )
+    }
+    public func withPairedEventId(_ newPairedEventId: UUID?) -> Event {
+        return Event(
+            id: id, sessionId: sessionId, type: type, category: category,
+            toolName: toolName, toolUseId: toolUseId, pairedEventId: newPairedEventId,
+            timestamp: timestamp, lineNumber: lineNumber, blockIndex: blockIndex,
+            summary: summary, rawPayloadJson: rawPayloadJson,
+            byteOffsetInJsonl: byteOffsetInJsonl
+        )
+    }
+}
+```
+
+- [ ] **Step 2: 重写 Tracker 为 class**
+
+```swift
+// Sources/CairnClaude/Parser/ToolPairingTracker.swift
+import Foundation
+import CairnCore
+
+/// tool_use ↔ tool_result 的 in-memory 配对表。
+///
+/// **M2.3 改 actor → class**:需要在 `db.writeSync` 的 sync 闭包内同步调
+/// `observe`,单事务完成 upsert → observe → updatePaired → updateCursor。
+/// EventIngestor actor 内 serial 使用,NSLock 做防御。
+public final class ToolPairingTracker: @unchecked Sendable {
+    private var inflight: [String: UUID] = [:]
+    private let lock = NSLock()
+
+    public init() {}
+
+    public func observe(_ events: [Event]) -> [Event] {
+        lock.lock(); defer { lock.unlock() }
+        return events.map { event in
+            switch event.type {
+            case .toolUse:
+                if let tid = event.toolUseId { inflight[tid] = event.id }
+                return event
+            case .toolResult:
+                guard let tid = event.toolUseId,
+                      let useId = inflight.removeValue(forKey: tid) else {
+                    return event
+                }
+                return event.withPairedEventId(useId)
+            default:
+                return event
+            }
+        }
+    }
+
+    public func restore(from existing: [Event]) {
+        lock.lock(); defer { lock.unlock() }
+        inflight.removeAll()
+        var useEvents: [String: UUID] = [:]
+        var pairedResultUseIds: Set<String> = []
+        for e in existing {
+            guard let tid = e.toolUseId else { continue }
+            switch e.type {
+            case .toolUse:
+                useEvents[tid] = e.id
+            case .toolResult:
+                // ⚠️ M2.3 修订:只有 paired_event_id 非空的 tool_result 才算"已配对"。
+                // crash-recovery 下 DB 里 paired=null 的孤儿不应让对应 tool_use 漏进 inflight,
+                // 否则下次同 toolUseId 来的 tool_result 找不到 inflight 配不上。
+                if e.pairedEventId != nil {
+                    pairedResultUseIds.insert(tid)
+                }
+            default: break
+            }
+        }
+        for (tid, useId) in useEvents where !pairedResultUseIds.contains(tid) {
+            inflight[tid] = useId
+        }
+    }
+
+    public func inflightCount() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return inflight.count
+    }
+}
+```
+
+- [ ] **Step 3: 改 ToolPairingTrackerTests 去掉 async/await**
+
+```swift
+func test_pairsUseThenResult() throws {
+    let tracker = ToolPairingTracker()
+    let sid = UUID()
+    let use = Event(...)
+    let result = Event(...)
+    _ = tracker.observe([use])  // 无 await
+    XCTAssertEqual(tracker.inflightCount(), 1)
+    let paired = tracker.observe([result])
+    XCTAssertEqual(paired.first?.pairedEventId, use.id)
+    XCTAssertEqual(tracker.inflightCount(), 0)
+}
+// 其他 2 test 类似改,去掉 async
+```
+
+- [ ] **Step 4: 跑测试 + build**
+
+```bash
+swift build && swift test --filter ToolPairingTrackerTests 2>&1 | grep -E "Executed|fail"
+```
+期望:3 tests pass。
+
+- [ ] **Step 5: commit**
+
+```bash
+git add Sources/CairnClaude/Parser/ToolPairingTracker.swift Sources/CairnCore/Event.swift Tests/CairnClaudeTests/Parser/ToolPairingTrackerTests.swift
+git commit -m "refactor(m2.3): ToolPairingTracker actor→class; Event.withId/withPairedEventId
+
+M2.3 需要在 db.writeSync sync 闭包内同步调 observe,actor 的 async method
+做不到。改 class + NSLock + restore 改为只认 paired_event_id 非空的
+tool_result 为"已配对"(crash recovery 下孤儿不会漏进 inflight)。"
+```
 
 **Files**:
 - Create: `Sources/CairnClaude/Ingestor/EventIngestor.swift`
@@ -667,14 +810,7 @@ handleLines 里改:`let copy = e.withId(stableId)`。
 
 Task 6 之前需要:
 
-- [ ] **Step 0a: 给 Event 加 withId(_:)**
-
-```swift
-// Sources/CairnCore/Event.swift
-extension Event {
-    public func withId(_ newId: UUID) -> Event { ... }  // 见上
-}
-```
+- [ ] **Step 0a:**`Event.withId` / `withPairedEventId` 已在 T3b Step 1 加。跳过。
 
 - [ ] **Step 0b: 修改 JSONLWatcher.WatcherEvent 加字节偏移**
 
@@ -698,7 +834,7 @@ ingestNewBytes 调用 emit 时传 `result.newOffset`。
 swift test --filter JSONLWatcherIntegrationTests 2>&1 | grep Executed
 ```
 
-- [ ] **Step 1: 回到 handleLines 完整实现**(改用 withId + byteOffsetAfter)
+- [ ] **Step 1: handleLines 完整实现(单事务)**
 
 ```swift
 private func handleLines(
@@ -713,51 +849,42 @@ private func handleLines(
             lineNumber: lineNum, isFirstLine: isFirst
         ))
     }
-    guard !parsed.isEmpty else {
-        // 仍要推进 cursor(忽略类型的行也要推进,否则下次 reconcile 重读)
-        try? await database.write { db in
-            try SessionDAO.updateCursorSync(
-                sessionId: sessionId, byteOffset: byteOffsetAfter,
-                lastLineNumber: startLineNumber + Int64(lines.count) - 1, db: db
-            )
-        }
-        return
-    }
 
+    // **单事务**:upsert → observe → updatePaired → updateCursor 全在一次
+    // writeSync 闭包内完成,原子性保证(tracker 是 class,observe 同步调用)。
+    // 避免"事务 1 写了 tool_result 但 pairedEventId 还没回填,下次启动
+    // tracker.restore 以为已配对"的孤儿场景。
+    //
+    // 即使 parsed 为空(全是忽略类型),也要推进 cursor,否则下次 reconcile
+    // 会重读。
     do {
-        // 事务 1:upsert + cursor
-        let stableEvents = try await database.write { db -> [Event] in
-            var result: [Event] = []
-            result.reserveCapacity(parsed.count)
+        let paired: [Event] = try database.writeSync { [tracker] db -> [Event] in
+            // 1. upsertByLineBlock → stable id
+            var withStableId: [Event] = []
+            withStableId.reserveCapacity(parsed.count)
             for e in parsed {
                 let stableId = try EventDAO.upsertByLineBlockSync(e, db: db)
-                result.append(e.withId(stableId))
+                withStableId.append(e.withId(stableId))
             }
+            // 2. tracker.observe(sync) — 填 pairedEventId
+            let paired = tracker.observe(withStableId)
+            // 3. 回写 pairedEventId(只对真正配对的 tool_result)
+            for e in paired where e.pairedEventId != nil {
+                try EventDAO.updatePairedEventIdSync(
+                    eventId: e.id, pairedEventId: e.pairedEventId, db: db
+                )
+            }
+            // 4. 推进 cursor — 即使 parsed 空也要推,用 batch 最后一行的 lineNumber
+            let lastLineNumber = parsed.last?.lineNumber
+                ?? (startLineNumber + Int64(lines.count) - 1)
             try SessionDAO.updateCursorSync(
-                sessionId: sessionId,
-                byteOffset: byteOffsetAfter,
-                lastLineNumber: (parsed.last?.lineNumber ?? startLineNumber),
-                db: db
+                sessionId: sessionId, byteOffset: byteOffsetAfter,
+                lastLineNumber: lastLineNumber, db: db
             )
-            return result
+            return paired
         }
 
-        // tracker.observe:填 pairedEventId
-        let paired = await tracker.observe(stableEvents)
-
-        // 事务 2:回写 pairedEventId
-        let toUpdate = paired.filter { $0.pairedEventId != nil }
-        if !toUpdate.isEmpty {
-            try await database.write { db in
-                for e in toUpdate {
-                    try EventDAO.updatePairedEventIdSync(
-                        eventId: e.id, pairedEventId: e.pairedEventId,
-                        db: db
-                    )
-                }
-            }
-        }
-
+        // emit 在事务外,不持锁
         for e in paired { emit(.persisted(e)) }
     } catch {
         emit(.error(sessionId: sessionId, lineNumberStart: startLineNumber, error: error))
@@ -1025,8 +1152,11 @@ if ProcessInfo.processInfo.environment["CAIRN_DEV_WATCH"] == "1",
         }
     }
 
-    try? await watcher.start()
+    // ⚠️ 顺序关键:ingestor.start() 先——它内部会订阅 watcher.events()。
+    // 如果 watcher 先 start,已经 emit 的 .discovered 会丢(ingestor 还没
+    // 注册 continuation)。设计决策 #21。
     await ingestor.start()
+    try? await watcher.start()
 }
 ```
 
@@ -1101,8 +1231,9 @@ sqlite3 "/Users/sorain/Library/Application Support/Cairn/cairn.sqlite" \
 - **UI 不接**:stream 没有消费者,仅 harness 打日志(M2.4)
 - **handleRemoved 是 no-op**:M2.6 做 session 消失后的状态清理
 - **restore limit 10_000**:大 session 若事件 > 10k 会截断(M2.7 懒加载)
-- **两步事务**:pairedEventId 回写是独立第二事务,极端情况(崩溃在两事务之间)会留下 tool_result 没配对;下次启动 tracker.restore 从 DB 重建 inflight 修复
 - **不做 session workspace 反推**:M2.6
+- **Tracker actor → class**:M2.3 对 M2.2 的 breaking change(见 T3b),测试一并改。M2.6 如果要支持跨 ingestor 并发,需要复评 Tracker 线程模型
+- **restore 修订**:`ToolPairingTracker.restore` 现在只把 "paired_event_id 非空的 tool_result" 视为已配对,孤儿 tool_result(paired_event_id=null)让对应 tool_use 重进 inflight,下一个同 toolUseId 的 tool_result 会触发完整修复(upsert + updatePaired 同事务)
 
 ---
 
