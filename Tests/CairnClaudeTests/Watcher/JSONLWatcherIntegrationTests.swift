@@ -205,6 +205,16 @@ final class JSONLWatcherIntegrationTests: XCTestCase {
         XCTAssertEqual(saved2?.byteOffset, offsetAfterFirstRun)
     }
 
+    /// 同 path 得同 UUID;不同 path 得不同 UUID。跨启动的 cursor 复用
+     /// 依赖此性质(subagents 子目录文件名 `agent-xxx` 不是 UUID 格式)。
+    func test_stableUUID_deterministic() {
+        let u1 = JSONLWatcher.stableUUID(from: "/tmp/a/b.jsonl")
+        let u2 = JSONLWatcher.stableUUID(from: "/tmp/a/b.jsonl")
+        let u3 = JSONLWatcher.stableUUID(from: "/tmp/a/c.jsonl")
+        XCTAssertEqual(u1, u2)
+        XCTAssertNotEqual(u1, u3)
+    }
+
     private func withTimeout<T: Sendable>(
         seconds: Double, _ body: @Sendable @escaping () async throws -> T
     ) async throws -> T {

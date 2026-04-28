@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import CairnCore
 import CairnStorage
 
@@ -73,6 +74,11 @@ public actor JSONLWatcher {
         }
         self.reconciler = rec
         await rec.start()
+
+        // 4. 启动即跑一次 reconcile:把已 discovered 但 cursor 落后的 session
+        //    立刻推进(spec §4.2 "启动 reconcile" 隐含语义,否则用户要等 30s 才
+        //    能看到历史 session 的行流出)。
+        await runReconcile()
     }
 
     public func stop() async {
@@ -110,7 +116,14 @@ public actor JSONLWatcher {
 
         let wsId = defaultWorkspaceId
         let basename = jsonlURL.deletingPathExtension().lastPathComponent
-        let sessionId = UUID(uuidString: basename) ?? UUID()
+        // ⚠️ 实测:~/.claude/projects/ 下除主 session 外,subagents 子目录里的
+        // 文件名是 `agent-xxx.jsonl`,不是 UUID 格式。UUID(uuidString:) 返回
+        // nil → 之前 fallback 到 `UUID()` 生成随机 id,**每次启动都新 id**,
+        // 于是 SessionDAO.fetch(id:) 永远查不到,cursor 持久化完全失效。
+        // 用路径派生稳定 UUID(SHA256 前 16 字节,设 v4 variant)—— 同 path
+        // 每次都得到同 id,fetch 能复用。
+        let sessionId = UUID(uuidString: basename)
+            ?? Self.stableUUID(from: jsonlURL.path)
 
         // ⚠️ 必须先 fetch:如果 DB 里已有这个 session 的 row(上次运行留下的),
         // 直接复用其 byte_offset / last_line_number。否则每次启动 discover
@@ -218,5 +231,20 @@ public actor JSONLWatcher {
                 await ingestNewBytes(sessionId: session.id)
             }
         }
+    }
+
+    /// 用 SHA256(path) 前 16 字节派生稳定 UUID。设 v4 variant 让格式合法。
+    /// 同 path → 同 UUID,跨启动稳定;不同 path → 不同 UUID(碰撞概率 2^-128)。
+    static func stableUUID(from path: String) -> UUID {
+        let hash = SHA256.hash(data: Data(path.utf8))
+        var bytes = Array(hash.prefix(16))
+        bytes[6] = (bytes[6] & 0x0f) | 0x40  // v4
+        bytes[8] = (bytes[8] & 0x3f) | 0x80  // variant
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 }
