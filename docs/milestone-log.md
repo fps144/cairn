@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M2.2 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
+- [ ] M2.3 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
@@ -36,6 +36,55 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.2 JSONLParser + 12 Event 映射 + tool_use↔result 配对
+
+**Completed**: 2026-04-28
+**Tag**: `m2-2-done`
+**Commits**: 6 个(`4923028` fixture / `0600088` JSONLEntry / `0c0c0a3` Parser / `965f344` ToolPairingTracker / `946043a` 14 测试 + compact 精确化 / `5b02cee` scaffold bump)
+
+**Summary**:
+- CairnClaude 新增 `Parser/` 3 文件:`JSONLEntry`(表层 Codable + 双 ISO8601 formatter fallback)/ `JSONLParser`(纯函数,单行 in → 0-N Event out)/ `ToolPairingTracker`(actor,tool_use↔result in-memory 配对 + `restore(from:)` 接口)
+- spec §4.3 12 种 JSONL type 映射全部实现:user_message / tool_result / assistant_text / assistant_thinking / tool_use / api_usage / compact_boundary(派生)/ error(派生);忽略类型 8 种(attachment / system / custom-title / progress / file-history-snapshot / permission-mode / last-prompt / queue-operation / agent-name / tag)
+- spec §4.4 tool_use↔result 配对:`ToolPairingTracker.observe` 线性 in-memory 填 `pairedEventId`
+- 10 个真实 session 裁剪 fixture(sanitize 后)+ 14 个 parser 测试(12 fixture 断言 + 1 性能 smoke + 1 本机真实 smoke)
+- **严格范围控制**:不写 events 表(M2.3)、不接 UI(M2.4)、不改 session state(M2.6)
+- **160 单测**(原 143 + M2.2 新 17)全绿
+
+**架构合规**(spec §3.2):Parser 在 CairnClaude 内,只依赖 CairnCore;ToolPairingTracker 同;Tests 用 `resources: [.copy("Parser/fixtures")]` bundle 10 fixture;UI/Storage 未触及。
+
+**执行阶段修正 / 偏离 plan 的 3 处**:
+1. **SPM `.copy("Parser/fixtures")` 实际扁平化**:plan 猜 bundle 内保留 `Parser/fixtures/` 前缀,实测只保留**末段目录** `fixtures/`。`Bundle.module.url(subdirectory:)` 要写 `"fixtures"` 不是 `"Parser/fixtures"`
+2. **`compact_boundary` 过度派生**(plan 第二轮自检漏了):单靠 `parentUuid == nil` 判,metadata entry(permission-mode / last-prompt 等)**无 parentUuid 字段**时 Swift `as? String` 也是 nil,被误派生。本机 52 行真实 session 派生 18 次(应 1 次)。修:`JSONLEntry` 加 `parentUuidExplicitlyNull` 字段,区分 "JSON 显式 null" 和 "字段缺失",parser 只在显式 null 时派生。修后 18 → 1
+3. **Package.swift 加 `.testTarget(resources: [.copy("Parser/fixtures")])`**,plan T8 Step 2 已写
+
+**关键设计决策**(plan pinned,21 条):
+- Parser 纯函数无状态;配对状态下沉到独立 actor
+- 单行可 yield 0-N Event;blockIndex 作 secondary 排序键
+- `message.content` 异构用 `JSONSerialization` + `[String: Any]` 手解析,不强 Codable
+- `api_usage` 作为独立 Event 从 assistant 派生,summary 填 `"in=X out=Y cache=Z"`
+- 忽略类型返回空但**仍走 compact 派生**(type 与 compact 正交)
+- 错误行容错:malformed → 空数组 + stderr warning,不抛
+- **`pairedEventId` 是 parser 生成的随机 UUID,非 DB stable id** —— M2.3 EventIngestor 必须先 DAO upsert 用 `(sessionId, lineNumber, blockIndex)` 唯一约束换回 DB stable id、覆盖 `event.id`,再调 `tracker.observe`,否则 `tool_result.paired_event_id` 指向不存在的 id
+
+**本机真实 session 验证**(52 行):
+```
+api_usage=14  tool_use=8  tool_result=8  user_message=5
+assistant_text=3  assistant_thinking=3  compact_boundary=1
+```
+tool_use/result 完美配对;api_usage 和 assistant 类(3+3+8=14)完美对应。
+
+**Acceptance**: T12 5 项全通过(用户验收)。
+
+**Known limitations**:
+- **事件不落盘**:parser 输出被丢弃,M2.3 EventIngestor 接入
+- **pairedEventId 非 DB stable id**:M2.3 对接硬约束(见上)
+- **cross-entry 配对**:只管单 session 内
+- **session 生命周期**:parser 不改 session state,M2.6
+- **system.cwd 提取**:parser 返回空(M2.6 Session↔Workspace 映射时处理)
+- **SwiftLog**:用 stderr 直写,M2.7 统一
+
+---
 
 ### M2.1 JSONLWatcher — FSEvents + vnode + 30s reconcile 三层兜底
 
