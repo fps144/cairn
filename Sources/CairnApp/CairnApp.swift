@@ -1,22 +1,75 @@
 import SwiftUI
+import AppKit
 import CairnUI
 import CairnTerminal
 import CairnStorage
 
+/// AppKit 代理。单一持久化入口:持有 `database` + `split` 引用,
+/// 暴露 `saveLayoutNow()` 给 SwiftUI onChange 和 `applicationWillTerminate`。
+///
+/// 为什么用 class delegate 而不是 `@State`:
+/// - 之前把 `database` 存在 App struct 的 `@State` 上,但 App 是 value type,
+///   struct 方法捕获的 self 和 @State underlying storage 之间的时序在某些
+///   路径下不可靠 —— 实测 `~/Library/Application Support/Cairn/cairn.sqlite`
+///   的 `layout_states` 表始终为空,save 从未成功落盘。
+/// - 改由一个 `final class` delegate 统一持有 DB + split 引用,就没有 value-type
+///   复制 / SwiftUI state wrapper 时序问题。
+/// - 同时在 `applicationWillTerminate` 补一次保底 `saveLayoutNow`,
+///   即使增量 onChange 一个没触发,Cmd+Q 前也一定落盘一次。
+@MainActor
+final class CairnAppDelegate: NSObject, NSApplicationDelegate {
+    var database: CairnDatabase?
+    /// SplitCoordinator 由 App 在 .task 里注入;delegate 弱引用以免循环持有。
+    weak var split: SplitCoordinator?
+
+    /// v1 defaultWorkspaceId:硬编码 UUID,跨启动稳定。M3.5 Workspace 管理
+    /// 就位后替换为真实 workspace id。
+    let defaultWorkspaceId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+    /// **同步**保存布局到 SQLite。主线程 ms 级,可接受。
+    /// 在 onChange 回调 + applicationWillTerminate 里调用。
+    func saveLayoutNow(reason: String) {
+        guard let db = database, let split = split else {
+            FileHandle.standardError.write(Data(
+                "[CairnApp] save skipped (\(reason)): db=\(database != nil) split=\(split != nil)\n".utf8
+            ))
+            return
+        }
+        let snapshot = LayoutSerializer.snapshot(from: split)
+        do {
+            let json = try LayoutSerializer.encode(snapshot)
+            try LayoutStateDAO.upsertSync(
+                workspaceId: defaultWorkspaceId,
+                layoutJson: json,
+                updatedAt: Date(),
+                in: db
+            )
+            FileHandle.standardError.write(Data(
+                "[CairnApp] saved layout (\(reason), \(json.count) bytes)\n".utf8
+            ))
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[CairnApp] save failed (\(reason)): \(error)\n".utf8
+            ))
+        }
+    }
+
+    /// Cmd+Q / 关窗退出前的最后保底。applicationWillTerminate 在 main thread
+    /// 同步回调,可直接同步写盘。
+    nonisolated func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            saveLayoutNow(reason: "willTerminate")
+        }
+    }
+}
+
 @main
 struct CairnApp: App {
+    @NSApplicationDelegateAdaptor(CairnAppDelegate.self) var appDelegate
+
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showInspector: Bool = true
     @State private var split = SplitCoordinator()
-
-    /// v1 defaultWorkspaceId:**hardcoded UUID**(stable across launches)。
-    /// 初稿用 `UUID()` 每次启动生成新 id,导致 LayoutStateDAO.fetch 永远查不到
-    /// 上次保存的布局(都是新 key)—— 恢复完全失效。
-    /// M3.5 Workspace 管理就位后替换为真实 workspace id。
-    private let defaultWorkspaceId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-
-    /// 持久化用的 DB(task 里初始化)
-    @State private var database: CairnDatabase?
 
     var body: some Scene {
         WindowGroup("Cairn", content: {
@@ -28,11 +81,19 @@ struct CairnApp: App {
             .task {
                 await initializeDatabase()
             }
-            // Observable 变化触发保存 debounce
-            .onChange(of: split.groups.map { $0.tabs.count }) { _, _ in saveLayoutNow() }
-            .onChange(of: split.groups.flatMap { $0.tabs }.map(\.cwd)) { _, _ in saveLayoutNow() }
-            .onChange(of: split.groups.map { $0.activeTabId }) { _, _ in saveLayoutNow() }
-            .onChange(of: split.activeGroupIndex) { _, _ in saveLayoutNow() }
+            // 任意 @Observable 变化 → 立即同步写盘。
+            .onChange(of: split.groups.map { $0.tabs.count }) { _, _ in
+                appDelegate.saveLayoutNow(reason: "tabs.count")
+            }
+            .onChange(of: split.groups.flatMap { $0.tabs }.map(\.cwd)) { _, _ in
+                appDelegate.saveLayoutNow(reason: "cwd")
+            }
+            .onChange(of: split.groups.map { $0.activeTabId }) { _, _ in
+                appDelegate.saveLayoutNow(reason: "activeTabId")
+            }
+            .onChange(of: split.activeGroupIndex) { _, _ in
+                appDelegate.saveLayoutNow(reason: "activeGroupIndex")
+            }
         })
         .defaultSize(width: 1280, height: 800)
         .windowToolbarStyle(.unified)
@@ -57,7 +118,7 @@ struct CairnApp: App {
                 Button("New Tab") {
                     withAnimation {
                         _ = split.activeGroup.openTab(
-                            workspaceId: defaultWorkspaceId,
+                            workspaceId: appDelegate.defaultWorkspaceId,
                             onProcessTerminated: { [weak split] tabId in
                                 split?.handleTabTerminated(tabId: tabId)
                             }
@@ -87,7 +148,7 @@ struct CairnApp: App {
                 Button("Split Horizontal") {
                     withAnimation {
                         split.splitHorizontal(
-                            workspaceId: defaultWorkspaceId,
+                            workspaceId: appDelegate.defaultWorkspaceId,
                             onProcessTerminated: { [weak split] tabId in
                                 split?.handleTabTerminated(tabId: tabId)
                             }
@@ -103,16 +164,18 @@ struct CairnApp: App {
 
     @MainActor
     private func initializeDatabase() async {
+        appDelegate.split = split
         do {
             let db = try await CairnDatabase(
                 location: .productionSupportDirectory,
                 migrator: CairnStorage.makeMigrator()
             )
-            self.database = db
+            appDelegate.database = db
+            FileHandle.standardError.write(Data("[CairnApp] DB opened\n".utf8))
 
             // 尝试 restore 布局
             if let layoutJson = try await LayoutStateDAO.fetch(
-                workspaceId: defaultWorkspaceId, in: db
+                workspaceId: appDelegate.defaultWorkspaceId, in: db
             ) {
                 let layout = try LayoutSerializer.decode(layoutJson.layoutJson)
                 LayoutSerializer.restore(
@@ -122,47 +185,26 @@ struct CairnApp: App {
                         split?.handleTabTerminated(tabId: tabId)
                     }
                 )
+                FileHandle.standardError.write(Data(
+                    "[CairnApp] restored \(layout.groups.count) group(s), \(layout.groups.reduce(0) { $0 + $1.tabs.count }) tab(s)\n".utf8
+                ))
+            } else {
+                FileHandle.standardError.write(Data("[CairnApp] no saved layout\n".utf8))
             }
         } catch {
-            // DB 打不开或 restore 失败,继续用空状态(不阻塞 App 启动)
-            print("[CairnApp] DB init / restore failed: \(error)")
+            FileHandle.standardError.write(Data(
+                "[CairnApp] DB init / restore failed: \(error)\n".utf8
+            ))
         }
 
         // 首次启动 or restore 后仍无 tab → 开默认
         if split.activeGroup.tabs.isEmpty {
             split.activeGroup.openTab(
-                workspaceId: defaultWorkspaceId,
+                workspaceId: appDelegate.defaultWorkspaceId,
                 onProcessTerminated: { [weak split] tabId in
                     split?.handleTabTerminated(tabId: tabId)
                 }
             )
-        }
-    }
-
-    // MARK: - Persistence
-
-    /// **同步**保存布局到 SQLite。
-    ///
-    /// 之前两版实现都假(500ms debounce 启动 async Task;后来去掉 debounce 但
-    /// 仍是 `Task { await upsert }`)—— SwiftUI App 在 Cmd+Q 时进程被立刻
-    /// 终止,pending Task **不会 resume**,最后一次 onChange 触发的 save
-    /// 静默丢失(磁盘 layout_states 表永远是空)。改用 `upsertSync`,在 onChange
-    /// 回调(MainActor)上直接同步写 SQLite。JSON 行很小,write 是 ms 级,
-    /// 主线程可接受;换来的是 Cmd+Q 前最后一次改动必然落盘。
-    @MainActor
-    private func saveLayoutNow() {
-        guard let db = database else { return }
-        let snapshot = LayoutSerializer.snapshot(from: split)
-        do {
-            let json = try LayoutSerializer.encode(snapshot)
-            try LayoutStateDAO.upsertSync(
-                workspaceId: defaultWorkspaceId,
-                layoutJson: json,
-                updatedAt: Date(),
-                in: db
-            )
-        } catch {
-            print("[CairnApp] layout save failed: \(error)")
         }
     }
 }
