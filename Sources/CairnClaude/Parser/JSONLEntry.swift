@@ -6,6 +6,10 @@ import Foundation
 public struct JSONLEntry {
     public let type: String
     public let parentUuid: String?
+    /// 区分 "JSON 里 `parentUuid: null`"(true) vs "无 parentUuid 字段"(false)。
+    /// compact_boundary 只在**显式 null**时派生;metadata entry(permission-mode
+    /// 等)根本没 parentUuid 字段,不应派生。
+    public let parentUuidExplicitlyNull: Bool
     public let timestamp: Date?
     public let sessionId: String?
     public let uuid: String?
@@ -38,9 +42,11 @@ public struct JSONLEntry {
             if let d = ISO8601DateFormatter.withFractional.date(from: s) { return d }
             return ISO8601DateFormatter.basic.date(from: s)
         }()
+        let parentUuidField: Any? = obj["parentUuid"]
         return JSONLEntry(
             type: type,
-            parentUuid: obj["parentUuid"] as? String,
+            parentUuid: parentUuidField as? String,
+            parentUuidExplicitlyNull: parentUuidField is NSNull,
             timestamp: timestamp,
             sessionId: obj["sessionId"] as? String,
             uuid: obj["uuid"] as? String,

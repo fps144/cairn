@@ -45,8 +45,10 @@ public enum JSONLParser {
             return []  // 未知 type 完全跳过,避免垃圾数据派生 compact
         }
 
-        // 派生 compact_boundary
-        if entry.parentUuid == nil && !isFirstLine {
+        // 派生 compact_boundary —— 只在 JSON 里**显式 `parentUuid: null`** 时触发。
+        // metadata entry(permission-mode / last-prompt 等)根本没 parentUuid 字段,
+        // 属于"字段缺失"语义,不是 compact 边界。
+        if entry.parentUuidExplicitlyNull && !isFirstLine {
             events.append(Event(
                 sessionId: sessionId,
                 type: .compactBoundary,
