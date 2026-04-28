@@ -49,5 +49,6 @@ let package = Package(
             dependencies: ["CairnClaude"],
             resources: [.copy("Parser/fixtures")]
         ),
+        .testTarget(name: "CairnServicesTests", dependencies: ["CairnServices"]),
     ]
 )
