@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M2.3 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
+- [ ] M2.4 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
@@ -36,6 +36,54 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.3 EventIngestor + Schema v2 + 批量事务
+
+**Completed**: 2026-04-28
+**Tag**: `m2-3-done`
+**Commits**: 13 个(`d43749d` schema v2 / `86dfd02` upsertByLineBlock / `0ec5628` sync DAO helpers / `1ee7afa` Tracker class + Event helpers / `644961e` EventIngestor 全部 handler / `6af2582` 5 集成测试 / `fa6048b` perf 163ms / `b64d241` harness 切换 / `d3989ae` scaffold bump + docs/push)
+
+**Summary**:
+- Schema v2 migration:`events` 加 `UNIQUE INDEX(session_id, line_number, block_index)`—— 解 M2.2 遗留"parser 每次生成新 UUID vs DB 需 stable id"
+- `EventDAO.upsertByLineBlockSync`:`ON CONFLICT(sid, line, block) DO UPDATE ... RETURNING id`,一句 SQL 完成 upsert + 返回稳定 id
+- `ToolPairingTracker` actor → **class + NSLock**(M2.2 breaking change):能在 `db.writeSync` sync 闭包内同步调 observe
+- `Event.withId(_:)` / `withPairedEventId(_:)` immutable helpers(id 是 let)
+- `EventIngestor` actor:订阅 watcher stream,**单事务**内编排 upsert → observe → updatePaired → updateCursor
+- `JSONLWatcher.WatcherEvent.lines` 加 `byteOffsetAfter` 字段供 cursor 推进
+- `Tracker.restore` 修订:只把 `paired_event_id 非空` 的 tool_result 视为已配对,crash-recovery 下孤儿让 tool_use 重进 inflight
+- 169 单测全绿(原 160 + M2.3 新 9:2 EventDAO + 4 Tracker + 5 Integration + 1 Perf - 3 原 Tracker async)
+- **性能**:1000 行 ingest **163ms**(spec §8.5 硬指标 500ms,3x margin)
+- **真实验证**:本机 494 session 全量 ingest,**events 表 44444 行,tool_use/tool_result 99.85% 配对,0 重复(GROUP BY sid+line+block count>1 = 0)**
+
+**架构合规**(spec §3.2):
+- EventIngestor 放 CairnClaude/Ingestor/,依赖 CairnCore + CairnStorage
+- tracker / parser / watcher / ingestor 四组件单一职责分离
+- UI / Services / Terminal 未触及
+
+**执行阶段修正 / 偏离 plan 的小处**:
+1. **`test_v1Migration_isIdempotent` 断言从 count==1 改 count==2** —— 加了 v2 migration,schema_versions 应有两行
+2. SchemaV2 用 `CREATE UNIQUE INDEX` 而非 `ALTER TABLE ADD UNIQUE`(SQLite 不支持后者),等效
+3. 按 plan 自检 v2 的修订已贯穿实现:单事务、start 顺序、restore 严格判 paired
+
+**关键设计决策**(plan pinned,21 条):
+- 单事务 atomicity —— 解 plan 两事务方案下 crash 孤儿问题
+- Tracker actor→class 配合 sync 闭包
+- events 表 `paired_event_id` 无 FK(故意,容忍暂态 null)
+- handleRemoved no-op —— `.crashed` 状态留 M2.6
+- startup-time tracker.restore 从 DB 重建 inflight
+
+**Acceptance**: T14 用户验收 5 项 + 我代跑磁盘取证全通过;重复 ingest 检测 = 0 是最强证据。
+
+**Known limitations**:
+- **UI 不接**:events 流没有消费者(M2.4 Timeline)
+- **session state 不转换**:ingestor 不判 `.ended/.abandoned/.crashed`(M2.6)
+- **handleRemoved no-op**:M2.6 做
+- **restore limit 10_000**:大 session 截断(M2.7 懒加载)
+- **workspace 反推**:session 一律 default workspace(M2.6)
+- **孤儿历史 tool_result**:`paired=null` 的 15 个 tool_result 是 M2.3 之前的历史遗留,新增数据不会再产生(单事务保证)
+- **SwiftLog**:stderr 直写(M2.7)
+
+---
 
 ### M2.2 JSONLParser + 12 Event 映射 + tool_use↔result 配对
 
