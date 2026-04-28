@@ -2,7 +2,7 @@
 
 > 一款 macOS 原生 AI 终端,把 Claude Code 的每次会话变成可读、可审查、可回放的任务轨迹。
 
-**状态**: 🚧 Phase 0 开发中(尚未发布)
+**状态**: 🚧 Phase 1 已完成,Phase 2 开发中(尚未发布)
 
 ## 这是什么
 
@@ -22,9 +22,46 @@ sudo xattr -rd com.apple.quarantine /Applications/Cairn.app
 
 ## 当前阶段
 
-**M0.1 — 仓库基础设施 + Probe 勘察**(Phase 0 第 1 milestone)
+**Phase 1 收工**(M0.1 – M1.5):SPM 6 模块、SQLite 持久化、SwiftTerm 多 tab 多分屏、布局跨启动恢复。
+
+**Phase 2 进行中**:Claude Code session 集成 + Event Timeline UI。
 
 见 [`docs/superpowers/plans/`](docs/superpowers/plans/) 下最新的计划文档。
+
+## Shell 配置(可选,让 cd 能更新 tab 标题)
+
+Cairn 按 OSC 7 escape 更新 tab 标题(显示 cwd 的最后一段)。多数 shell 默认不发 OSC 7,`cd` 后 tab 名不变。加一个 chpwd hook emit OSC 7 就好:
+
+**zsh**(推荐加到 `~/.zshrc`):
+
+```zsh
+# 让 Cairn / iTerm2 / Terminal.app 的 tab 标题跟随 cwd
+function chpwd() {
+  printf '\033]7;file://%s%s\007' "$HOST" "$PWD"
+}
+chpwd   # shell 启动立刻 emit 一次,当前 cwd 生效
+```
+
+**bash**(`~/.bashrc`):
+
+```bash
+__cairn_osc7() {
+  printf '\033]7;file://%s%s\007' "$HOSTNAME" "$PWD"
+}
+PROMPT_COMMAND="__cairn_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+__cairn_osc7
+```
+
+**fish**(`~/.config/fish/config.fish`):
+
+```fish
+function __cairn_osc7 --on-variable PWD
+  printf '\033]7;file://%s%s\a' $hostname $PWD
+end
+__cairn_osc7
+```
+
+> 配置完**在 Cairn 里**重开一个 tab 验证:`cd /tmp` → tab 标题变 `tmp`。
 
 ## 开发模式
 

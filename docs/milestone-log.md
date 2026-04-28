@@ -27,9 +27,9 @@
 
 ## 🎉 Phase 1 完成(M0.1 → M1.5)
 
-**节点**:2026-04-27
+**节点**:2026-04-28
 **tag 范围**:`m0-1-done` → `m1-5-done`
-**交付**:可用的原生 macOS 终端(多 tab / 水平分屏 / PTY 生命周期 / 布局持久化),完整 CairnCore 领域模型 + CairnStorage 持久化底座就绪,120 个单测绿。
+**交付**:可用的原生 macOS 终端(多 tab / 水平分屏 / PTY 生命周期 / 布局跨启动恢复),完整 CairnCore 领域模型 + CairnStorage 持久化底座就绪,120 个单测绿。
 
 **下一阶段**:Phase 2(M2.1 - M2.7)= Claude Code JSONL 观察能力,终点 v0.1 Beta 发布。
 
@@ -39,9 +39,9 @@
 
 ### M1.5 水平分屏 + OSC 7 cwd 跟踪 + 布局 SQLite 持久化
 
-**Completed**: 2026-04-27
+**Completed**: 2026-04-28
 **Tag**: `m1-5-done`
-**Commits**: 3 个(`983b268` / `805b142` / `251c4de`)
+**Commits**: 9 个 — 实现 3(`983b268` / `805b142` / `251c4de`)+ 验收修复 6(`b599520` docs / `c4ccbb3` 分屏 collapse + UI / `d3c370a` 同步写 / `47fbb3b` AppDelegate 保底 / `c663f0a` **真·根因:bootstrap workspace** / `4904634` Package.swift 修)
 
 **Summary**:
 - 架构重构:M1.4 的 `TabsCoordinator` 拆为 `TabGroup`(单组 tabs)+ `SplitCoordinator`(1-2 组)
@@ -60,6 +60,15 @@
 - 架构违反:初稿 `LayoutSerializer` 直接 `import CairnStorage`,build 报 `missing required module 'GRDBSQLite'` → 移除 load/save 到 CairnApp
 - JSON 格式断言:`CairnCore.jsonEncoder` 用 `.sortedKeys` 无 `.prettyPrinted`,紧凑格式无空格;测试断言 `"schemaVersion":1`(去掉空格)
 
+**验收阶段 4 轮修复**(用户视觉验证 → 日志诊断 → 逐层定位):
+1. **轮 1**(c4ccbb3):UI 问题 — TabBarView × 按钮绕过 `SplitCoordinator.collapseEmptyGroups` → 加 `closeTab(in:id:)` 统一入口;active 分屏全边框太重 → 改顶部 2pt accent 细条;`defaultWorkspaceId = UUID()` 每次启动新 id → 硬编码稳定 UUID;去 500ms debounce
+2. **轮 2**(d3c370a):去 debounce 仍不恢复 —— 磁盘取证 `layout_states` 表空 → 猜是 `Task { await upsert }` 被 Cmd+Q kill → `CairnDatabase` actor→`final class`,加 `writeSync`/`readSync`,DAO 加 `upsertSync`,`scheduleAutoSave` 同步写
+3. **轮 3**(47fbb3b):仍然不恢复 —— 怀疑 App struct @State `database` value-type 时序 → 新增 `CairnAppDelegate: NSApplicationDelegate` class 持有 `database + split`;`applicationWillTerminate` 里再同步保底 flush;关键节点 stderr 诊断日志
+4. **轮 4**(c663f0a,**真·根因**):从日志第一次看到 `SQLite error 19: FOREIGN KEY constraint failed` —— `layout_states.workspace_id REFERENCES workspaces(id)`,但 app 从没往 workspaces 表插过硬编码默认 id → `initializeDatabase` 里先 `WorkspaceDAO.upsert` 默认 workspace(id = 0000...0001, cwd = ~),之后所有 save 通过
+5. **收尾**(4904634):轮 4 新 `import CairnCore`,Package.swift `CairnApp` deps 补 `CairnCore`
+
+**经验总结**:写 FK 约束的 DAO,app 启动时必须 bootstrap 前置表行,否则 upsert 全挂。M3.5 接真实 Workspace 管理时补一个 app 级 bootstrap 回归测试(120 单测都是 DAO 内部先插 workspace,没覆盖"裸启动"路径)。
+
 **关键设计决策**(plan pinned):
 - ZStack 保活 + HSplitView 2 分屏 + onChange 派生值 debounce 持久化
 - restore 时 Swift `let id` 限制,PTY 全新启动用新 UUID,activeTabId 按**位置**匹配(影响极小,id 未暴露给用户)
@@ -68,9 +77,10 @@
 **Acceptance**: 见 M1.5 计划文档 T11 验收清单(7 项肉眼)。
 
 **Known limitations**:
-- OSC 7 需 shell 主动发 —— 未配 chpwd hook 的 shell 不会触发 cd update(chpwd hook 兜底留 v1.5+)
+- OSC 7 需 shell 主动发(已在 README 写 zsh/bash/fish 配置示例;shell 侧 chpwd hook 兜底留 v1.5+ 原生方案)
 - restore 后 tab 用新 UUID(与 persisted.id 不等价)
 - 分屏拖拽位置不持久化(v1 接受)
+- 窗口宽度/位置由 macOS `NSWindow` frame autosave 管(标准 macOS 行为,不是 Cairn 记的)
 - 本地化留 M4.1
 
 ---
