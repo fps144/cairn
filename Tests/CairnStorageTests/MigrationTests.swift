@@ -57,7 +57,7 @@ final class MigrationTests: XCTestCase {
         let count = try await queue.read { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM schema_versions") ?? 0
         }
-        XCTAssertEqual(count, 1, "重复 migrate 不应重复插入 schema_versions")
+        XCTAssertEqual(count, 2, "两次 migrate 应各插入 v1+v2 各一行,不重复")
     }
 
     // MARK: - Helper
