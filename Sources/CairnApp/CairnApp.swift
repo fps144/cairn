@@ -252,7 +252,7 @@ struct CairnApp: App {
                         FileHandle.standardError.write(Data(
                             "[JSONLWatcher] discovered \(s.id) at \(s.jsonlPath)\n".utf8
                         ))
-                    case .lines(let sid, let ls, let start):
+                    case .lines(let sid, let ls, let start, _):
                         FileHandle.standardError.write(Data(
                             "[JSONLWatcher] +\(ls.count) lines for \(sid) (from #\(start))\n".utf8
                         ))

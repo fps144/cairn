@@ -16,7 +16,11 @@ import CairnStorage
 public actor JSONLWatcher {
     public enum WatcherEvent: Sendable {
         case discovered(Session)
-        case lines(sessionId: UUID, lines: [String], lineNumberStart: Int64)
+        /// `byteOffsetAfter`:读完这批 lines 后文件的字节偏移。M2.3 EventIngestor
+        /// 用它推进 session.byte_offset。caller(M2.1 watcher 内部 ingestNewBytes)
+        /// 从 `IncrementalReader.Result.newOffset` 直接取。
+        case lines(sessionId: UUID, lines: [String],
+                   lineNumberStart: Int64, byteOffsetAfter: Int64)
         case removed(sessionId: UUID)
     }
 
@@ -213,7 +217,8 @@ public actor JSONLWatcher {
             emit(.lines(
                 sessionId: sessionId,
                 lines: result.lines,
-                lineNumberStart: session.lastLineNumber + 1
+                lineNumberStart: session.lastLineNumber + 1,
+                byteOffsetAfter: result.newOffset
             ))
         } catch {
             FileHandle.standardError.write(Data(

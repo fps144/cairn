@@ -89,7 +89,7 @@ final class JSONLWatcherIntegrationTests: XCTestCase {
         // 断言点:新 append 的 assistant 行必须在 lines 里出现。
         let lines = try await withTimeout(seconds: 5) { () -> [String]? in
             for await ev in stream {
-                if case .lines(_, let ls, _) = ev, ls.contains(#"{"type":"assistant"}"#) {
+                if case .lines(_, let ls, _, _) = ev, ls.contains(#"{"type":"assistant"}"#) {
                     return ls
                 }
             }
@@ -114,7 +114,7 @@ final class JSONLWatcherIntegrationTests: XCTestCase {
 
         let task = Task { () -> UUID? in
             for await ev in stream {
-                if case .lines(let sid, _, _) = ev { return sid }
+                if case .lines(let sid, _, _, _) = ev { return sid }
             }
             return nil
         }
@@ -158,7 +158,7 @@ final class JSONLWatcherIntegrationTests: XCTestCase {
             let collect = Task { () -> [String] in
                 var acc: [String] = []
                 for await ev in stream {
-                    if case .lines(_, let ls, _) = ev { acc.append(contentsOf: ls) }
+                    if case .lines(_, let ls, _, _) = ev { acc.append(contentsOf: ls) }
                     if acc.count >= 2 { break }
                 }
                 return acc
@@ -191,7 +191,7 @@ final class JSONLWatcherIntegrationTests: XCTestCase {
         let collect2 = Task { () -> [String] in
             var acc: [String] = []
             for await ev in stream2 {
-                if case .lines(_, let ls, _) = ev { acc.append(contentsOf: ls) }
+                if case .lines(_, let ls, _, _) = ev { acc.append(contentsOf: ls) }
                 if acc.count > 10 { break }
             }
             return acc
