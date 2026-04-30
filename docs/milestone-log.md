@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M2.5 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
+- [ ] M2.6 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
@@ -36,6 +36,50 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.5 工具卡片合并 + 折叠交互 + 视觉精修
+
+**Completed**: 2026-04-30
+**Tag**: `m2-5-done`
+**Commits**: 6 个(`79d7ae3` Aggregator / `83a36b0` VM entries/toggle / `4e98b79` 4 UI 组件 + ⌘⇧E / `bed62db` scaffold bump / `7de0f53` T15 4 处修 / `eb1d0e0` 快捷键改 ⌘⌥E)
+
+**Summary**:
+- `TimelineEntry` 枚举(`.single/.toolCard/.mergedTools/.compactBoundary`)+ `TimelineAggregator` **两次扫**纯函数算法:第一次识别合并 group(透明事件 api_usage/tool_result/thinking 跳过),第二次线性生成 entries
+- `TimelineViewModel` 加 `entries: [TimelineEntry]`(stored)+ `expandedIds: Set<UUID>` + `toggle/toggleExpandAll/isExpanded`;`handleForTesting` hook
+- 4 个 UI 组件:`ToolCardView`(折叠一行 + 展开 input/output + 绿✓/红×/progress 状态)/ `MergedToolsView`("Read × N" + 展开 N 小行)/ `ThinkingRowView`(折叠"thinking (N chars)")/ `CompactBoundaryView`(divider)
+- `TimelineView` 用 switch-case 按 entry 分派
+- 独立 `CommandMenu("Events")` 菜单 + ⌘⌥E "Expand / Collapse All"
+- spec §6.4 视觉语言:chevron.right/down 展开按钮(SF Symbols)、RoundedRectangle 卡片背景
+- 191 tests 全绿(原 176 + M2.5 新 15:12 aggregator + 3 VM toggle)
+
+**T15 用户反馈 4 处修订**(`7de0f53` + `eb1d0e0`):
+1. **Tool 不合并** —— 原 while 遇到非 tool_use 就 break;实际 JSONL 里连续 Read 之间夹 api_usage/tool_result。改两次扫,透明事件跳过继续扫同 cat tool_use;已配对的 tool_use 也合并,对应 result 被 consume 不重复渲染
+2. **Timeline 滚动卡顿** —— `entries` 原 computed property 每次 UI 读都 O(N) 聚合;改 stored + handle 末尾 `recomputeEntries()` 一次性更新
+3. **⌘⇧E 无效** —— 原 Button 在 `CommandGroup(replacing:.sidebar)` 里不在顶层 menu;改独立 `CommandMenu("Events")`。键位 ⌘⇧E 有 Mail/Xcode/浏览器冲突,换 ⌘⌥E(spec §6.7 原定 ⌘⇧E,M2.7 统一审校时再对齐)
+4. **thinking "0 chars" 空壳** —— DB 取证 657/697 条 thinking summary 长度为 0(Claude extended thinking 只留 signature,明文字段空)。aggregator 过滤 summary 空的 thinking 不渲染
+
+**架构合规**(spec §3.2):Aggregator/VM 在 CairnServices;UI 组件在 CairnUI;快捷键在 CairnApp commands;各层职责清晰。
+
+**关键设计决策**(plan pinned,22 条):
+- TimelineEntry 枚举代替 Event 数组 + UI 判断模式(聚合逻辑集中在 aggregator,UI 只负责 case 分派)
+- Aggregator 纯函数 + 两次扫:O(N) 预索引 + O(N*group) 识别合并 + O(N) 生成
+- 只可折叠 entry(toolCard/mergedTools/thinking)提供 toggle,其他永远展开(避免语义反)
+- TimelineEntry.id 用 `events[0].id` 不用 UUID() fallback(后者每帧重建所有 row)
+- 合并粒度是 category(fileRead 里 Read/NotebookRead 一并合)
+- 折叠态不持久化(重开 app 回默认)
+
+**Acceptance**: T15 用户实测:连续 Read 合并、Timeline 滚动流畅、Events 菜单在系统 menu bar 可见、⌘⌥E 展开/折叠生效。
+
+**Known limitations**(M2.6 / M2.7 解决):
+- **Tab↔Session 绑定** 仍未做(M2.6;目前多 tab 共享 timeline 仍 auto-switch)
+- **"⋮ live" 活跃指示:** M2.6(需要 session 状态)
+- **auto-scroll 无手滚检测:** 新消息总拉底,打断用户看历史;macOS 14 无精确 API,M2.7 配 macOS 15+ `onScrollGeometryChange`
+- **折叠态不持久化:** 重开 app 全折叠(M3.x)
+- **ToolCard JSON 无 syntax highlight:** 纯文本 + lineLimit(M2.7)
+- **Merged 展开只显 summary 小行**,不嵌套可再 toggle 的子 ToolCard(M2.7)
+- **快捷键 ⌘⌥E 偏离 spec §6.7 定的 ⌘⇧E**:M2.7 冲突审校后统一
+
+---
 
 ### M2.4 EventBus + Timeline View 基础
 
