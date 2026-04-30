@@ -223,7 +223,9 @@ git commit -m "feat(m2.6): TabSession.boundClaudeSessionId + bindClaudeSession"
 **Files**:
 - Modify: `Sources/CairnTerminal/LayoutSerializer.swift`
 
-- [ ] **Step 1: PersistedTab 加 optional 字段**
+- [ ] **Step 1: PersistedTab 加 optional 字段 + 显式 init(from:) 向后兼容**
+
+Swift synthesized `init(from:)` 对 `Optional<T>` 字段缺失 key 的行为**理论上** 返回 nil,但历史上不同 Swift 版本有微妙差异。显式 `decodeIfPresent` 零风险,plan 里明写:
 
 ```swift
 public struct PersistedTab: Codable, Equatable, Sendable {
@@ -232,8 +234,35 @@ public struct PersistedTab: Codable, Equatable, Sendable {
     public let title: String
     public let cwd: String
     public let shell: String
-    /// M2.6 加。旧 layout JSON 无此字段 decode 时用 decodeIfPresent 得 nil。
+    /// M2.6 加。旧 layout JSON 无此字段 → decodeIfPresent 得 nil。
     public let boundClaudeSessionId: UUID?
+
+    public init(
+        id: UUID, workspaceId: UUID, title: String,
+        cwd: String, shell: String, boundClaudeSessionId: UUID? = nil
+    ) {
+        self.id = id
+        self.workspaceId = workspaceId
+        self.title = title
+        self.cwd = cwd
+        self.shell = shell
+        self.boundClaudeSessionId = boundClaudeSessionId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, workspaceId, title, cwd, shell, boundClaudeSessionId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.workspaceId = try c.decode(UUID.self, forKey: .workspaceId)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.cwd = try c.decode(String.self, forKey: .cwd)
+        self.shell = try c.decode(String.self, forKey: .shell)
+        // 向后兼容旧 layout JSON(无此字段)
+        self.boundClaudeSessionId = try c.decodeIfPresent(UUID.self, forKey: .boundClaudeSessionId)
+    }
 }
 ```
 
@@ -248,13 +277,11 @@ PersistedTab(
 )
 
 // restore:
-created.boundClaudeSessionId = persisted.boundClaudeSessionId  // 直接赋值
+created.boundClaudeSessionId = persisted.boundClaudeSessionId
 ```
 
-- [ ] **Step 3: Codable 自动合成,优先显式 decodeIfPresent**(通过 `let boundClaudeSessionId: UUID?` + 默认合成处理 optional)
-
-- [ ] **Step 4: build + 跑 M1.5 LayoutSerializerTests 确认兼容**
-- [ ] **Step 5: commit**
+- [ ] **Step 3: build + 跑 LayoutSerializerTests 确认兼容**(旧 layout JSON 应能 decode 成功)
+- [ ] **Step 4: commit**
 
 ```bash
 git add Sources/CairnTerminal/LayoutSerializer.swift
@@ -368,7 +395,9 @@ public final class TabSessionBroker {
     }
 
     /// 从 JSONL 文件前 N 行找 `type=system` 的 cwd(M0.1 probe Q1 规则)。
-    private func resolveSessionCwd(_ session: Session) async -> String? {
+    /// **`nonisolated`** — 跳出 MainActor,磁盘 I/O + JSON parse 在 cooperative
+    /// thread pool 跑,不阻塞 UI 线程。
+    private nonisolated func resolveSessionCwd(_ session: Session) async -> String? {
         let url = URL(fileURLWithPath: session.jsonlPath)
         guard let data = try? Data(contentsOf: url) else { return nil }
         // 取前 20 行或前 16KB
@@ -452,8 +481,9 @@ private let database: CairnDatabase
 ```
 
 - [ ] **Step 2: 改 init 签名;CairnApp 调用点更新**
-- [ ] **Step 3: build**
-- [ ] **Step 4: commit**
+- [ ] **Step 3: 更新测试 `TimelineViewModelTests.makeVM`**:已有 local `db` 变量,返回 `TimelineViewModel(ingestor: ingestor, database: db)`(breaking change 但测试内部已构造 db)
+- [ ] **Step 4: build** + `swift test --filter TimelineViewModelTests` 全过
+- [ ] **Step 5: commit**
 
 ---
 
@@ -861,8 +891,40 @@ try await watcher.start() // 最后启动 emit 源
 ```
 
 - [ ] **Step 1: delegate 加 broker + monitor 字段**
-- [ ] **Step 2: 装配 + willTerminate stop**
-- [ ] **Step 3: commit**
+
+```swift
+// CairnAppDelegate 里加:
+var broker: TabSessionBroker?
+var lifecycleMonitor: SessionLifecycleMonitor?
+```
+
+- [ ] **Step 2: 装配**(如上代码块)
+
+- [ ] **Step 3: willTerminate 里 stop 顺序**
+
+```swift
+nonisolated func applicationWillTerminate(_ notification: Notification) {
+    MainActor.assumeIsolated {
+        saveLayoutNow(reason: "willTerminate")
+        timelineVM?.stop()
+        // M2.6 加:broker 和 monitor 先于 ingestor/watcher stop
+        if let broker = broker {
+            Task { await broker.stop() }
+        }
+        if let monitor = lifecycleMonitor {
+            Task { await monitor.stop() }
+        }
+        if let ingestor = eventIngestor {
+            Task { await ingestor.stop() }
+        }
+        if let watcher = jsonlWatcher {
+            Task { await watcher.stop() }
+        }
+    }
+}
+```
+
+- [ ] **Step 4: commit**
 
 ---
 
