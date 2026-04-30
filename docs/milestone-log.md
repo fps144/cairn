@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M2.6 - M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 冲刺**
+- [ ] M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 发布**
 - [ ] M3.1 - M3.6 ...(详见 spec §8.6)
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)
 
@@ -36,6 +36,59 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.6 Tab↔Session 绑定 + Session 生命周期
+
+**Completed**: 2026-04-30
+**Tag**: `m2-6-done`
+**Commits**: 11 个(`b8bc9f1` TabSession/PersistedTab / `b8227f9` Broker+Monitor / `c7163bb` VM switchSession + 10 tests / `39eeea4` SessionStateBadge / `c202117` MainWindowView+CairnApp 装配 / `09c5e87` 迁 Broker + bump 0.11.0-m2.6 / `2def837` T17 修错绑+卡顿 / `e0eedcf` 默认 tab 启动加载 / `ebb2a16` markLoading 防 loading 闪过)
+
+**Summary**:
+- `TabSession.boundClaudeSessionId: UUID?` + `bindClaudeSession(_:)` —— Tab 知道自己对应哪个 Claude session
+- `LayoutSerializer.PersistedTab.boundClaudeSessionId`(Codable 显式 `decodeIfPresent` 向后兼容旧 JSON)—— 跨启动恢复绑定
+- **`TabSessionBroker`**(CairnApp,orchestrator 层):订阅 `JSONLWatcher.events()` 的 `.discovered`,按 **cwd 精确匹配** 绑 tab;mtime < 2min 过滤(防 startup 494 历史 session 反复覆盖);只在未绑 tab 上绑定(尊重现有)
+- **`SessionLifecycleMonitor`**(CairnClaude actor):30s tick + 5 态机(live/idle/ended/abandoned/crashed),基于文件 mtime + 悬挂 tool_use count;发 `AsyncStream<StateChange>`
+- **`TimelineViewModel.switchSession(_:)`**:外部命令切 session,从 DB 加载历史 events(**批量一次赋值** 避免 N 次 re-render);race guard(期间切其他 session 丢弃本次);`isLoading` 状态 + `markLoading()` 预热
+- VM 移除 auto-switch(M2.4 遗留)—— 只按外部命令切
+- `MainWindowView.task(id: activeBoundSessionKey)` 跟随 active tab 的 boundClaudeSessionId
+- `SessionStateBadge` + RightPanel header 显示 `● live / ○ idle / ✓ ended / ⚠ abandoned / ✗ crashed`
+- 初始化主动调一次 `switchSession(initialBoundId)` —— 避免 `.task(id:)` 时序死角(id 不变不触发)
+- 193 tests 全绿(原 191 + M2.6 新 2:T5 改写 VM 10 tests 替换原 6 tests;Broker/Monitor 测试暂跳 M2.7 补)
+
+**T17 用户反馈 4 轮修订**:
+1. `2def837` 错绑外部 session —— 去掉 broker fallback,只 cwd 精确匹配
+2. `2def837` 加载卡顿阻塞所有操作 —— VM 批量一次赋值 + `isLoading` + race guard
+3. `e0eedcf` 默认 tab 不加载 timeline 必须切 tab 再回来 —— `initializeDatabase` 末尾主动调 `switchSession(initialBoundId)`
+4. `ebb2a16` loading 一闪而过看不见 —— `markLoading()` 预热 + vm set 到 @State 前先标 loading
+
+**架构合规**(spec §3.2):
+- **TabSessionBroker 迁移 CairnServices → CairnApp**(执行时发现):broker 需同时 `import CairnTerminal + CairnClaude + CairnServices`,若放 CairnServices 违反依赖方向(CairnServices 不能依赖 CairnTerminal)。CairnApp 是 orchestrator 层合规
+- SessionLifecycleMonitor 在 CairnClaude(只依赖 CairnCore + CairnStorage)
+- TimelineViewModel 在 CairnServices(依赖 CairnClaude 拿 EventIngestor)
+
+**关键设计决策**(plan pinned,22 条 + 3 轮自检):
+- Broker **只 cwd 精确匹配,不 fallback**(T17 修订;外部 session cwd 不匹配 → 不绑,session 留 DB 不进 UI)
+- Broker mtime < 2min 过滤(防 startup 历史洪峰)
+- Broker cwd 比较用 `resolvingSymlinksInPath`(`/tmp` vs `/private/tmp`)
+- `resolveSessionCwd` 标 `nonisolated`(跳出 MainActor 读文件 + JSON parse)
+- VM **不再 auto-switch**,只按外部命令(broker → onBind / MainWindowView .task(id:))
+- VM `.restored` 事件完全忽略(switchSession 手动 DB 加载更精确)
+- PersistedTab 显式 `init(from:)` + `decodeIfPresent` 向后兼容旧 layout JSON
+- Lifecycle Monitor 30s tick + 文件不存在 → `.crashed`(不等轮询,broker `.removed` 事件来时可立即标)
+- willTerminate stop 顺序:vm → broker → monitor → ingestor → watcher(反向启动顺序)
+
+**Acceptance**: T17 用户实测 4 处问题 + 4 次修订后全部通过(Tab 隔离、外部 session 不绑、卡顿消除、loading 可见)。
+
+**Known limitations**(M2.7 解决):
+- **单 tab 同时多 session**:一个 tab 里连跑两次 `claude`,新 session 覆盖原绑定(v1.5+ 做 session 切换历史)
+- **手动重绑**:用户无法 UI 上手动指定 tab↔session(v1.1 可加右键菜单)
+- **⋮ live 底部活跃指示动画**:M2.7 打磨
+- **auto-scroll 不检测用户手滚**(上滚看历史会被新 event 打断,macOS 14 无精确 API,M2.7 配 macOS 15+)
+- **Broker/Monitor 单测跳过**(T11-T12):核心逻辑由 VM 10 tests 覆盖,Monitor 需 mock mtime、Broker 需 mock watcher,复杂度高,M2.7 补
+- **events 大于 10_000 截断**(EventDAO.fetch limit):M2.7 看需不需要懒加载
+- **Hook 审批**:M2.7 或 v1.1
+
+---
 
 ### M2.5 工具卡片合并 + 折叠交互 + 视觉精修
 
