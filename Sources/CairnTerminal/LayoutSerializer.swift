@@ -18,6 +18,38 @@ public struct PersistedLayout: Codable, Equatable, Sendable {
         public let title: String
         public let cwd: String
         public let shell: String
+        /// M2.6 加。旧 layout JSON 无此字段 → decodeIfPresent 得 nil。
+        public let boundClaudeSessionId: UUID?
+
+        public init(
+            id: UUID, workspaceId: UUID, title: String,
+            cwd: String, shell: String,
+            boundClaudeSessionId: UUID? = nil
+        ) {
+            self.id = id
+            self.workspaceId = workspaceId
+            self.title = title
+            self.cwd = cwd
+            self.shell = shell
+            self.boundClaudeSessionId = boundClaudeSessionId
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, workspaceId, title, cwd, shell, boundClaudeSessionId
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decode(UUID.self, forKey: .id)
+            self.workspaceId = try c.decode(UUID.self, forKey: .workspaceId)
+            self.title = try c.decode(String.self, forKey: .title)
+            self.cwd = try c.decode(String.self, forKey: .cwd)
+            self.shell = try c.decode(String.self, forKey: .shell)
+            // 向后兼容:旧 layout JSON 无此字段,decodeIfPresent 返回 nil
+            self.boundClaudeSessionId = try c.decodeIfPresent(
+                UUID.self, forKey: .boundClaudeSessionId
+            )
+        }
     }
 }
 
@@ -36,7 +68,8 @@ public enum LayoutSerializer {
                         workspaceId: tab.workspaceId,
                         title: tab.title,
                         cwd: tab.cwd,
-                        shell: tab.shell
+                        shell: tab.shell,
+                        boundClaudeSessionId: tab.boundClaudeSessionId
                     )
                 },
                 activeTabId: group.activeTabId
@@ -75,6 +108,10 @@ public enum LayoutSerializer {
                         onProcessTerminated(created.id)
                     }
                 )
+                // M2.6 恢复 Tab↔Session 绑定
+                if let boundId = persisted.boundClaudeSessionId {
+                    created.bindClaudeSession(boundId)
+                }
                 group.appendRestoredTab(created)
             }
             // activeTabId 恢复:按 "persisted tabs 里 activeTabId 的位置" 匹配

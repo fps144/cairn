@@ -25,6 +25,10 @@ public final class TabSession: Identifiable, Equatable {
     public let shell: String
     /// `TabState.active`(进程运行中)或 `.closed`(进程已退出)。
     public var state: TabState
+    /// M2.6:此 tab 绑定到的 Claude session id(由 TabSessionBroker 在
+    /// 发现新 JSONL 时按 cwd 匹配 + active 启发式绑)。nil = 还没绑 / 未跑 claude。
+    /// 布局持久化(LayoutSerializer.PersistedTab.boundClaudeSessionId)跨启动恢复。
+    public var boundClaudeSessionId: UUID?
     /// 底层 SwiftTerm view(NSView 子类)。整个 TabSession 生命周期不变。
     public let terminalView: LocalProcessTerminalView
 
@@ -53,6 +57,13 @@ public final class TabSession: Identifiable, Equatable {
     public func terminate() {
         terminalView.process?.terminate()
         state = .closed
+    }
+
+    /// M2.6:绑定 Claude session。broker 在 watcher.discovered 时按 cwd
+    /// 匹配后调用。幂等(相同 id 不 trigger observation)。
+    public func bindClaudeSession(_ id: UUID) {
+        guard boundClaudeSessionId != id else { return }
+        boundClaudeSessionId = id
     }
 
     /// OSC 7 上报新 cwd 时调用。同时更新 title(basename 反映当前目录)。
