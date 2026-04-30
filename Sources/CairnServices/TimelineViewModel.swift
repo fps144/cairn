@@ -19,6 +19,9 @@ public final class TimelineViewModel {
     /// M2.6:当前 session 的生命周期状态。外部(CairnApp)订阅
     /// `SessionLifecycleMonitor.events()` 匹配 sessionId 时调 `updateSessionState`。
     public private(set) var currentSessionState: SessionState?
+    /// M2.6 T17 反馈:switchSession 加载 DB 历史时显示 ProgressView,避免
+    /// 几千 events 加载 + 渲染阻塞期间看到空白面板。
+    public private(set) var isLoading: Bool = false
     public private(set) var events: [Event] = []
     /// M2.5 T15 修订:改为 **stored property**,events 变动时一次性重算。
     /// 原 computed property 导致每次 UI 读都重算 O(N),几千 events 且
@@ -134,30 +137,54 @@ public final class TimelineViewModel {
     /// 外部命令切换当前显示的 session。
     /// - nil:清空 events,UI 显示空态(Tab 未绑定 claude session)
     /// - 非 nil:加载该 session 的历史 events(按 lineNumber/blockIndex 排序)
+    ///
+    /// T17 反馈修订:
+    /// - 批量一次赋值 events,避免每次 append 都触发 @Observable re-render
+    ///   (千级 events 逐条 append 会让 SwiftUI 重渲数千次,MainActor 被卡)
+    /// - 加 `isLoading` 状态,UI 显示 ProgressView
+    /// - race guard:期间若又 switchSession 到别的,丢弃本次加载
     public func switchSession(_ sessionId: UUID?) async {
         currentSessionId = sessionId
-        currentSessionState = nil  // 新 session state 由 monitor 下 tick 提供
+        currentSessionState = nil
         events = []
         seenIds = []
         recomputeEntries()
 
-        guard let sid = sessionId else { return }
+        guard let sid = sessionId else {
+            isLoading = false
+            return
+        }
+
+        isLoading = true
 
         do {
             let historical = try await EventDAO.fetch(
                 sessionId: sid, limit: 10_000, offset: 0, in: database
             )
+            // race guard:期间若切到别的 session,丢弃
+            guard currentSessionId == sid else {
+                isLoading = false
+                return
+            }
+            // **批量一次赋值** —— 避免 for-append 触发 N 次 re-render
+            var newEvents: [Event] = []
+            var newSeenIds: Set<UUID> = []
+            newEvents.reserveCapacity(historical.count)
             for e in historical {
-                if !seenIds.contains(e.id) {
-                    seenIds.insert(e.id)
-                    events.append(e)
+                if !newSeenIds.contains(e.id) {
+                    newSeenIds.insert(e.id)
+                    newEvents.append(e)
                 }
             }
+            events = newEvents
+            seenIds = newSeenIds
             recomputeEntries()
+            isLoading = false
         } catch {
             FileHandle.standardError.write(Data(
                 "[TimelineViewModel] switchSession load failed: \(error)\n".utf8
             ))
+            isLoading = false
         }
     }
 

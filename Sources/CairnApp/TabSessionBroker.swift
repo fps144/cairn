@@ -83,17 +83,22 @@ public final class TabSessionBroker {
         }()
         if orderedTabs.isEmpty { return }
 
-        // cwd 匹配(未绑定)→ fallback 第一个未绑 tab
+        // **只 cwd 精确匹配**(T17 用户反馈修订):
+        // 去掉 fallback "第一个未绑 tab" 逻辑 —— 否则外部 Claude(Trae / iTerm
+        // 里跑的,mtime 新鲜,cwd 不在 Cairn 任何 tab 下)会错绑到 Cairn 的
+        // active tab,让 Timeline 显示外部 session 的 events。
+        // 现在:无 cwd 精确匹配就不绑,session 留 DB 不进 UI。
         let sessionCwd = await resolveSessionCwd(session)
-        let normalizedSessionCwd = sessionCwd.map { Self.normalize($0) }
+        guard let sCwd = sessionCwd else {
+            seenSessionIds.insert(session.id)
+            return
+        }
+        let normalizedSessionCwd = Self.normalize(sCwd)
         let cwdMatched = orderedTabs.first { tab in
             tab.boundClaudeSessionId == nil
-                && normalizedSessionCwd != nil
                 && Self.normalize(tab.cwd) == normalizedSessionCwd
         }
-        let target = cwdMatched ?? orderedTabs.first { $0.boundClaudeSessionId == nil }
-        guard let tab = target else {
-            // 无可用 tab:session 留 DB,UI 不显示
+        guard let tab = cwdMatched else {
             seenSessionIds.insert(session.id)
             return
         }

@@ -12,7 +12,16 @@ public struct TimelineView: View {
     }
 
     public var body: some View {
-        if vm.events.isEmpty {
+        if vm.isLoading {
+            VStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading events…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 160)
+        } else if vm.events.isEmpty {
             VStack(spacing: 8) {
                 Text("Events stream in as Claude Code runs.")
                     .font(.callout)
