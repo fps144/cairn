@@ -270,7 +270,7 @@ struct CairnApp: App {
             defaultWorkspaceId: appDelegate.defaultWorkspaceId
         )
         let ingestor = EventIngestor(database: db, watcher: watcher)
-        let vm = TimelineViewModel(ingestor: ingestor)
+        let vm = TimelineViewModel(ingestor: ingestor, database: db)
 
         // 双持:delegate(生命周期)+ @State(UI 观察)
         appDelegate.jsonlWatcher = watcher

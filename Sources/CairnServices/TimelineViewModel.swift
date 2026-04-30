@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import CairnCore
 import CairnClaude
+import CairnStorage
 
 /// 右侧 Inspector 的 Event Timeline ViewModel。
 ///
@@ -15,6 +16,9 @@ import CairnClaude
 @MainActor
 public final class TimelineViewModel {
     public private(set) var currentSessionId: UUID?
+    /// M2.6:当前 session 的生命周期状态。外部(CairnApp)订阅
+    /// `SessionLifecycleMonitor.events()` 匹配 sessionId 时调 `updateSessionState`。
+    public private(set) var currentSessionState: SessionState?
     public private(set) var events: [Event] = []
     /// M2.5 T15 修订:改为 **stored property**,events 变动时一次性重算。
     /// 原 computed property 导致每次 UI 读都重算 O(N),几千 events 且
@@ -27,13 +31,16 @@ public final class TimelineViewModel {
     public private(set) var expandedIds: Set<UUID> = []
 
     private let ingestor: EventIngestor
+    /// M2.6:switchSession 从 DB 加载历史 events 要用
+    private let database: CairnDatabase
     private var task: Task<Void, Never>?
     /// 已入 events 数组的 id 集合,防御重复 emit。M2.3 DB 层 UNIQUE 约束已去重,
     /// UI 再加一层防御(seenIds 单增长,一个 session 几千 UUID 内存可接受)。
     private var seenIds: Set<UUID> = []
 
-    public init(ingestor: EventIngestor) {
+    public init(ingestor: EventIngestor, database: CairnDatabase) {
         self.ingestor = ingestor
+        self.database = database
     }
 
     /// 启动订阅。**调用方必须在 ingestor.start() 之前 await 此方法**,
@@ -105,35 +112,59 @@ public final class TimelineViewModel {
         defer { recomputeEntries() }
         switch ev {
         case .persisted(let e):
-            // **auto-switch 到最新 session**(M2.4 T12 用户反馈修订):
-            // 用户新开 tab 跑 claude 对话,期望 timeline 切换到新 session。
-            // 原 "锁定第一个 session" 让用户看不到新会话。
-            // 代价:startup 批量 ingest 494 个历史 session 时 UI 会瞬态跳动,
-            // 但很快稳定到最后一个 emit 的 session。M2.6 Tab↔Session 绑定后
-            // 用户可显式选定 session,此处 auto-switch 自然让位。
-            if e.sessionId != currentSessionId {
-                currentSessionId = e.sessionId
-                events = []
-                seenIds = []
-            }
+            // M2.6 修订:VM 不再 auto-switch。session 切换由外部
+            // (broker / MainWindowView .task(id:))显式调 switchSession。
+            // 这里只追加属于 currentSession 的事件。
+            guard let cur = currentSessionId, e.sessionId == cur else { return }
             guard !seenIds.contains(e.id) else { return }
             seenIds.insert(e.id)
             events.append(e)
 
-        case .restored(let sid, let restoredEvents):
-            // restored 只对 current session 生效 —— 历史事件 prepend。
-            // auto-switch 不触发(restored 只发生在 discover,不代表"新鲜"活动)。
-            guard sid == currentSessionId else { return }
-            let sorted = restoredEvents.sorted {
-                ($0.lineNumber, $0.blockIndex) < ($1.lineNumber, $1.blockIndex)
-            }
-            let newOnes = sorted.filter { !seenIds.contains($0.id) }
-            for e in newOnes { seenIds.insert(e.id) }
-            events = newOnes + events
+        case .restored:
+            // M2.6:完全忽略 —— switchSession 手动从 DB 加载历史,精确且时序稳。
+            break
 
         case .error:
-            break  // M2.4 不在 UI 显示 ingest 错误;stderr 已 log
+            break  // stderr 已 log
         }
+    }
+
+    // MARK: - M2.6 session 切换 API
+
+    /// 外部命令切换当前显示的 session。
+    /// - nil:清空 events,UI 显示空态(Tab 未绑定 claude session)
+    /// - 非 nil:加载该 session 的历史 events(按 lineNumber/blockIndex 排序)
+    public func switchSession(_ sessionId: UUID?) async {
+        currentSessionId = sessionId
+        currentSessionState = nil  // 新 session state 由 monitor 下 tick 提供
+        events = []
+        seenIds = []
+        recomputeEntries()
+
+        guard let sid = sessionId else { return }
+
+        do {
+            let historical = try await EventDAO.fetch(
+                sessionId: sid, limit: 10_000, offset: 0, in: database
+            )
+            for e in historical {
+                if !seenIds.contains(e.id) {
+                    seenIds.insert(e.id)
+                    events.append(e)
+                }
+            }
+            recomputeEntries()
+        } catch {
+            FileHandle.standardError.write(Data(
+                "[TimelineViewModel] switchSession load failed: \(error)\n".utf8
+            ))
+        }
+    }
+
+    /// 外部(CairnApp)订阅 SessionLifecycleMonitor.events() 时
+    /// match currentSessionId 后调此方法更新 UI badge。
+    public func updateSessionState(_ state: SessionState?) {
+        currentSessionState = state
     }
 }
 
