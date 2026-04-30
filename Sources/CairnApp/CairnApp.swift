@@ -359,5 +359,13 @@ struct CairnApp: App {
                 "[Ingestor] watcher start failed: \(error)\n".utf8
             ))
         }
+
+        // T17 修订:MainWindowView 的 `.task(id: activeBoundSessionKey)` 只在 id
+        // 变化时触发。vm 从 nil 变 non-nil 时 activeBoundSessionKey 值没变
+        // (restore 的 tab 的 boundClaudeSessionId 保持不变),SwiftUI 不会重跑
+        // task,Timeline 永远不加载。这里在 vm 就绪后主动调一次初始 switchSession,
+        // 让默认 tab 一打开 app 就显示它绑定 session 的 timeline。
+        let initialBoundId = split.activeGroup.activeTab?.boundClaudeSessionId
+        await vm.switchSession(initialBoundId)
     }
 }
