@@ -26,7 +26,14 @@ public struct RightPanelView: View {
 
                 // Event Timeline 节
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Event Timeline").font(.headline)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Event Timeline").font(.headline)
+                        Spacer()
+                        if let vm = timelineVM {
+                            // M2.6:显示当前 session 的生命周期状态
+                            SessionStateBadge(state: vm.currentSessionState)
+                        }
+                    }
                     if let vm = timelineVM {
                         TimelineView(vm: vm)
                             .frame(minHeight: 240)
