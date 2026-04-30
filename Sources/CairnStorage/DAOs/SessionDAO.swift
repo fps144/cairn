@@ -73,6 +73,18 @@ public enum SessionDAO {
         )
     }
 
+    /// M2.6:更新 session state。`SessionLifecycleMonitor` 30s tick 调用。
+    public static func updateState(
+        sessionId: UUID, state: SessionState, in db: CairnDatabase
+    ) async throws {
+        try await db.write { db in
+            try db.execute(
+                sql: "UPDATE sessions SET state = ? WHERE id = ?",
+                arguments: [state.rawValue, sessionId.uuidString]
+            )
+        }
+    }
+
     public static func fetch(id: UUID, in db: CairnDatabase) async throws -> Session? {
         try await db.read { db in
             try Row.fetchOne(
