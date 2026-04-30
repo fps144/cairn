@@ -193,6 +193,13 @@ public final class TimelineViewModel {
     public func updateSessionState(_ state: SessionState?) {
         currentSessionState = state
     }
+
+    /// T17:预先把 isLoading 标 true,给 SwiftUI 至少一帧显示 ProgressView。
+    /// 在 `initializeDatabase` 把 vm set 到 @State 之前调,让 body 首次渲染
+    /// 看到 vm non-nil 时就进 loading 分支,避免 DB fetch 太快 loading 一闪而过。
+    public func markLoading() {
+        isLoading = true
+    }
 }
 
 // MARK: - Testing

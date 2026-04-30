@@ -282,6 +282,13 @@ struct CairnApp: App {
         let ingestor = EventIngestor(database: db, watcher: watcher)
         let vm = TimelineViewModel(ingestor: ingestor, database: db)
 
+        // T17:若默认 tab 有 bound session,预先 markLoading,保证 body 首次
+        // 渲染 vm 时就是 loading 态(ProgressView),避免 switchSession 的 DB
+        // fetch 太快(几 ms)导致 SwiftUI 合并渲染,loading 一闪而过看不见。
+        if split.activeGroup.activeTab?.boundClaudeSessionId != nil {
+            vm.markLoading()
+        }
+
         // 双持:delegate(生命周期)+ @State(UI 观察)
         appDelegate.jsonlWatcher = watcher
         appDelegate.eventIngestor = ingestor
