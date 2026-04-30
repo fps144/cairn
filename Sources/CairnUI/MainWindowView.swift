@@ -26,6 +26,14 @@ public struct MainWindowView: View {
         self.timelineVM = timelineVM
     }
 
+    /// M2.6:active tab 的 boundClaudeSessionId 作为 .task(id:) 的识别 key。
+    /// boundClaudeSessionId 变化(新绑定 / 解绑 / 切 tab)时,task 重跑
+    /// `timelineVM.switchSession`。首次 appear 也触发(`.task(id:)` 规则)。
+    private var activeBoundSessionKey: UUID? {
+        guard split.activeGroupIndex < split.groups.count else { return nil }
+        return split.groups[split.activeGroupIndex].activeTab?.boundClaudeSessionId
+    }
+
     public var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView()
@@ -39,6 +47,11 @@ public struct MainWindowView: View {
         }
         .toolbar {
             CairnToolbarContent(showInspector: $showInspector)
+        }
+        .task(id: activeBoundSessionKey) {
+            if let vm = timelineVM {
+                await vm.switchSession(activeBoundSessionKey)
+            }
         }
     }
 

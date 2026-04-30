@@ -31,6 +31,10 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     /// M2.4 TimelineViewModel —— delegate 持生命周期版(willTerminate stop)。
     /// 另外 App struct 用 @State 持一份供 SwiftUI UI 观察,赋值时触发 body 重渲。
     var timelineVM: TimelineViewModel?
+    /// M2.6 Tab↔Session broker(按 cwd 绑 tab)
+    var broker: TabSessionBroker?
+    /// M2.6 Session lifecycle monitor(30s tick + 5 态机)
+    var lifecycleMonitor: SessionLifecycleMonitor?
 
     /// v1 defaultWorkspaceId:硬编码 UUID,跨启动稳定。M3.5 Workspace 管理
     /// 就位后替换为真实 workspace id。
@@ -69,10 +73,16 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             saveLayoutNow(reason: "willTerminate")
-            // 停止顺序:vm → ingestor → watcher(反向启动顺序)
-            // vm.stop 同步;ingestor/watcher.stop 是 async,起 Task 但进程可能
-            // 来不及跑完。cursor 每 chunk 已写盘,丢最后一块可接受。
+            // 停止顺序(反向启动顺序):vm → broker → monitor → ingestor → watcher。
+            // vm.stop 同步;其他 async,起 Task 但进程可能来不及跑完。
+            // cursor 每 chunk 已写盘,丢最后一块可接受。
             timelineVM?.stop()
+            if let broker = broker {
+                Task { await broker.stop() }
+            }
+            if let monitor = lifecycleMonitor {
+                Task { await monitor.stop() }
+            }
             if let ingestor = eventIngestor {
                 Task { await ingestor.stop() }
             }
@@ -278,9 +288,41 @@ struct CairnApp: App {
         appDelegate.timelineVM = vm
         self.timelineVM = vm  // ← 触发 SwiftUI 重渲 RightPanelView
 
-        // 顺序关键:vm.start 先订阅 ingestor;ingestor.start 再订阅 watcher;
-        // watcher.start 最后开始 emit。
+        // M2.6:TabSessionBroker + SessionLifecycleMonitor
+        let broker = TabSessionBroker(
+            split: split, watcher: watcher,
+            onBind: { [weak vm, split] tab, sessionId in
+                // 绑定后若此 tab 正在 active,立即切 vm 到新 session
+                // (.task(id:) 也会触发,但让 broker 在绑定同 event loop 里主动切,
+                //  "新 session 第一刻"无延迟)
+                if tab.id == split.groups[split.activeGroupIndex].activeTabId {
+                    Task { @MainActor in
+                        await vm?.switchSession(sessionId)
+                    }
+                }
+            }
+        )
+        let monitor = SessionLifecycleMonitor(database: db)
+        appDelegate.broker = broker
+        appDelegate.lifecycleMonitor = monitor
+
+        // 顺序关键:订阅源在 emit 之前。
+        // vm → broker → monitor → ingestor → watcher
         await vm.start()
+        await broker.start()
+        await monitor.start()
+
+        // 订阅 monitor.events 更新 vm.currentSessionState
+        let stateStream = await monitor.events()
+        Task { @MainActor [weak vm] in
+            for await change in stateStream {
+                guard let vm = vm else { break }
+                if change.sessionId == vm.currentSessionId {
+                    vm.updateSessionState(change.newState)
+                }
+            }
+        }
+
         await ingestor.start()
 
         // 可选 dev stderr 日志
