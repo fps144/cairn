@@ -139,14 +139,16 @@ struct CairnApp: App {
 
             }
 
-            // M2.5:独立 Events 菜单(之前放在 sidebar 组里用户看不到、快捷键
-            // 也不触发)。CommandMenu 会在 menu bar 创建一个顶层菜单,让
-            // ⌘⇧E 可见可按。
+            // M2.5:独立 Events 菜单。CommandMenu 在 menu bar 建顶层菜单
+            // (通常显示在 View 和 Window 之间)。
+            // T15 第二轮:快捷键 ⌘⇧E 与系统/其他 app 冲突(Mail/Xcode/浏览器
+            // 常见占用),换为 ⌘⌥E(Command + Option + E)避开。spec §6.7
+            // 原定 ⌘⇧E,执行时调整 —— 待 M2.7 统一审校所有快捷键冲突。
             CommandMenu("Events") {
                 Button("Expand / Collapse All") {
                     appDelegate.timelineVM?.toggleExpandAll()
                 }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .keyboardShortcut("e", modifiers: [.command, .option])
             }
 
             CommandGroup(after: .newItem) {
