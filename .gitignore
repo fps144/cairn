@@ -49,3 +49,6 @@ htmlcov/
 # 启用下面这行,防止后续重跑 probe.py 污染工作树。
 # 历史版本可通过 `git show fd238ca:probe/probe-report.md` 查看。
 /probe/probe-report.md
+
+# DMG release artifacts
+dist/

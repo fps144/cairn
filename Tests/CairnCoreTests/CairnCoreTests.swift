@@ -7,9 +7,10 @@ final class CairnCoreTests: XCTestCase {
     }
 
     func test_scaffoldVersion_containsMilestoneTag() {
+        // M2.7 起改 semver(0.1.0-beta);不再含 milestone tag
         XCTAssertTrue(
-            CairnCore.scaffoldVersion.contains("m2.6"),
-            "版本字符串应包含当前 milestone 标识,实际是 \(CairnCore.scaffoldVersion)"
+            CairnCore.scaffoldVersion.contains("beta"),
+            "v0.1 Beta 版本字符串应含 beta,实际是 \(CairnCore.scaffoldVersion)"
         )
     }
 }
