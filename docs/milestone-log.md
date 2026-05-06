@@ -19,9 +19,21 @@
 
 ## 待完成
 
-- [ ] M2.7 ...(详见 spec §8.5)**— Phase 2 v0.1 Beta 发布**
-- [ ] M3.1 - M3.6 ...(详见 spec §8.6)
-- [ ] M4.1 - M4.4 ...(详见 spec §8.7)
+- [ ] M3.1 - M3.6 ...(详见 spec §8.6)**— Phase 3 Task 层 → v0.5**
+- [ ] M4.1 - M4.4 ...(详见 spec §8.7)**— Phase 4 生产级化 → v1.0**
+
+---
+
+## 🎉 Phase 2 完成 / v0.1 Beta 发布(M2.1 → M2.7)
+
+**节点**:2026-04-30
+**Tag**:`v0.1.0-beta` / `m2-7-done`
+**DMG**:`dist/Cairn-v0.1.0-beta-macos-arm64.dmg`(3.1 MB)
+**Release**:https://github.com/fps144/cairn/releases/tag/v0.1.0-beta(用户手动 web 创建)
+
+Cairn 从 M0.1 probe 到 v0.1 Beta 发布,共 **12 个 milestone**(7 个 Phase 1 + 7 个 Phase 2)、**~1 周内完成**。**199 单元测试**全绿。
+
+**核心交付**:macOS 原生 + 多 tab 分屏 + 实时 JSONL 观察 + Event Timeline 卡片折叠 + Tab↔Session 绑定 + Session 生命周期 5 态。MIT 永不签名分发。
 
 ---
 
@@ -36,6 +48,55 @@
 ---
 
 ## 已完成(逆序)
+
+### M2.7 v0.1 Beta 打磨 + DMG + GitHub Release
+
+**Completed**: 2026-04-30
+**Tag**: `m2-7-done` / `v0.1.0-beta`
+**Commits**: 3 个(`d0f18f1` plan / `6912401` Lifecycle Monitor 5 态纯函数测试 + Timeline auto-scroll pin/unpin / `db47fbd` v0.1.0 Beta 收工:semver bump + Info.plist + DMG 脚本 + README/CHANGELOG + 199 tests)
+
+**Summary**:
+- **打磨 T2**:`SessionLifecycleMonitor.computeStatePure(mtimeAge:fileExists:hangingToolUses:)` 抽出纯函数(`nonisolated static`),配 6 单测覆盖 5 态(live/idle/ended/abandoned/crashed)+ 文件不存在直降 crashed
+- **打磨 T3**:Timeline auto-scroll pin/unpin —— `TimelineViewModel.isAutoScrollPaused` + `toggleAutoScrollPaused()`;`TimelineView` 加浮动按钮(`pin.slash.fill` ↔ `arrow.down.to.line`);`.onChange` 自动滚到底受 `!isAutoScrollPaused` 守卫;再次点击立即滚底
+- **版本号**:semver 2.0 化 —— `CairnCore.scaffoldVersion` `0.11.0-m2.6` → `0.1.0-beta`;`Info.plist.CFBundleShortVersionString` `0.0.1` → `0.1.0`;旧测试断言"含 milestone tag"改为"含 beta"
+- **Info.plist**:`LSApplicationCategoryType = public.app-category.developer-tools`(已存在,M2.7 复审确认)
+- **README** 重写:状态行改"v0.1 Beta 已发布",新增 Install 段(DMG 下载 → 拖到 Applications → `sudo xattr -rd com.apple.quarantine`)、System requirements、Keyboard shortcuts 表(含 ⌘⌥E)、Known limitations
+- **CHANGELOG.md**(Keep a Changelog 格式):`[0.1.0-beta]` 条目含 Phase 1+2 全功能、Tag 历史表、Known Limitations、What's Next
+- **DMG 打包脚本** `scripts/build-release-dmg.sh`(`chmod +x`):arch 校验拒绝非 arm64 → 调 `make-app-bundle.sh release` → `hdiutil create UDZO` → 生成 SHA256 → 输出 `dist/Cairn-v0.1.0-beta-macos-arm64.dmg`(3.1 MB)+ `.sha256`;DMG 内嵌 `INSTALL.txt`(xattr 指南)
+- **`.gitignore`**:加 `dist/` 排除发布产物
+- **dist/release-notes.md**(用户手动 web 上传 GitHub Release 用):标题 / 功能列表 / 安装步骤 / SHA256 / 统计(199 tests / 12 milestones / ~1 周)/ "Built with Claude Opus 4.7"
+- **199 单测全绿**(M2.6 的 193 + M2.7 新 6 Lifecycle Monitor)
+- **DMG 产物**:`dist/Cairn-v0.1.0-beta-macos-arm64.dmg` 3.1 MB,SHA256 `8a89b00928dcee35488330a0b7d5cbfea0256bfcf64d256aa40fe87d72e35d82`
+- **tags**:`m2-7-done` + `v0.1.0-beta` 全部推 origin
+
+**架构合规**(spec §3.2):
+- LifecycleMonitor 测试在 `Tests/CairnClaudeTests/Lifecycle/`,只 `@testable import CairnClaude`
+- Timeline pin/unpin 状态在 `TimelineViewModel`(CairnServices),UI 按钮在 `TimelineView`(CairnUI),不跨层
+- DMG 脚本是开发工具(`scripts/`),不进 SwiftPM 编译产物
+
+**关键设计决策**(plan pinned,2 轮自检 + 4 处修订):
+- Lifecycle Monitor 测纯函数,不测 actor + AsyncStream 整体(后者需 mock mtime + 文件系统,复杂度高,核心五态机抽出来纯函数测足够)
+- Timeline pin/unpin 用浮动按钮(右下,不抢 header 视觉)而非 ScrollView 内嵌,避免影响 LazyVStack 性能
+- 永不签名:DMG 脚本严格不调用 `codesign`;README/CHANGELOG/release-notes 全部明示需 `xattr -rd com.apple.quarantine`
+- 版本号用 semver 2.0 (`0.1.0-beta`)而非 milestone tag (`0.11.0-m2.6`),发布起点对齐业界惯例
+- GitHub Release 不用 gh CLI(本机未装),走 web 手动上传(release-notes.md 待用户粘)
+- CHANGELOG `Keep a Changelog` 格式(对齐 changelog.md 社区主流)
+
+**Acceptance**: 自检阶段 `swift build` + `swift test` 全绿;DMG 在 dist/ 生成且 SHA256 文件 OK;tag + push 完成。**用户验收待 T13**:下载 DMG → xattr → 拖到 Applications → 启动 → 验证多 tab + JSONL 观察 + Timeline 卡片 + Lifecycle Badge + auto-scroll pin。
+
+**Known limitations**(留 Phase 3 / Phase 4):
+- **GitHub Release 创建**:用户手动在 web 上传 DMG + sha256 + 粘贴 release-notes.md 内容(Claude 无 gh CLI,且 Release 创建是产品决策点)
+- **CI/CD**:无 GitHub Actions;本地 `swift build` + `scripts/build-release-dmg.sh` 即发布全流程(M4.x 看是否上 Actions)
+- **icon.icns**:Dock 仍是 macOS generic 图标(M0.2 已知,品牌 / icon 设计待用户决策)
+- **本地化**:中文 String catalog 未翻(M4.1)
+- **Sparkle 自动更新**:不做(MIT + 不签名 + GitHub Release 路径,用户手动下载新版即可)
+- **Broker / Monitor 集成测试**:M2.6 跳过的还在跳(纯函数已覆盖 5 态;actor + watcher mock 复杂度留 Phase 4)
+- **events > 10_000 懒加载**:M2.6 遗留,未做
+- **Hook 审批 UI**:v1.1
+- **auto-scroll 检测用户手滚**:macOS 14 无精确 API,M2.7 用 pin/unpin 半自动方案(用户主动控制),M4.x 配 macOS 15+ `onScrollGeometryChange` 时再做全自动
+- **OSC 7 cwd shell 配置**:依然要用户手动加 chpwd hook(README 已说明)
+
+---
 
 ### M2.6 Tab↔Session 绑定 + Session 生命周期
 
