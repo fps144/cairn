@@ -79,19 +79,36 @@ public actor SessionLifecycleMonitor {
 
     func computeState(for session: Session) -> SessionState {
         let url = URL(fileURLWithPath: session.jsonlPath)
-        if !FileManager.default.fileExists(atPath: url.path) {
-            return .crashed
-        }
+        let fileExists = FileManager.default.fileExists(atPath: url.path)
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let mtime = (attrs?[.modificationDate] as? Date) ?? session.startedAt
         let age = Date().timeIntervalSince(mtime)
-
-        if age < 60 { return .live }
-        if age < 5 * 60 { return .idle }
-
         let hanging = (try? countHangingToolUses(sessionId: session.id)) ?? 0
-        if hanging == 0 { return .ended }
-        if age >= 30 * 60 { return .abandoned }
+        return Self.computeStatePure(
+            mtimeAge: age,
+            fileExists: fileExists,
+            hangingToolUses: hanging
+        )
+    }
+
+    /// 纯函数版本(可单测,不依赖 actor / DB / FS)。
+    /// spec §4.5 五态判定:
+    /// - 文件不存在 → `.crashed`
+    /// - mtime < 60s → `.live`
+    /// - 60s ≤ mtime < 5min → `.idle`
+    /// - mtime ≥ 5min 且 hangingToolUses == 0 → `.ended`
+    /// - mtime ≥ 30min 且有悬挂 tool_use → `.abandoned`
+    /// - 5min ≤ mtime < 30min 且有悬挂 → `.idle`(未到 abandoned)
+    public nonisolated static func computeStatePure(
+        mtimeAge: TimeInterval,
+        fileExists: Bool,
+        hangingToolUses: Int
+    ) -> SessionState {
+        if !fileExists { return .crashed }
+        if mtimeAge < 60 { return .live }
+        if mtimeAge < 5 * 60 { return .idle }
+        if hangingToolUses == 0 { return .ended }
+        if mtimeAge >= 30 * 60 { return .abandoned }
         return .idle
     }
 

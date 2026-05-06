@@ -22,6 +22,9 @@ public final class TimelineViewModel {
     /// M2.6 T17 反馈:switchSession 加载 DB 历史时显示 ProgressView,避免
     /// 几千 events 加载 + 渲染阻塞期间看到空白面板。
     public private(set) var isLoading: Bool = false
+    /// M2.7:用户上滚看历史时手动 pin 暂停 auto-scroll;再 pin 恢复并滚到底。
+    /// macOS 14 没精确 scroll geometry API,用按钮替代自动检测。
+    public private(set) var isAutoScrollPaused: Bool = false
     public private(set) var events: [Event] = []
     /// M2.5 T15 修订:改为 **stored property**,events 变动时一次性重算。
     /// 原 computed property 导致每次 UI 读都重算 O(N),几千 events 且
@@ -192,6 +195,11 @@ public final class TimelineViewModel {
     /// match currentSessionId 后调此方法更新 UI badge。
     public func updateSessionState(_ state: SessionState?) {
         currentSessionState = state
+    }
+
+    /// M2.7:pin/unpin 切换 auto-scroll 暂停状态。
+    public func toggleAutoScrollPaused() {
+        isAutoScrollPaused.toggle()
     }
 
     /// T17:预先把 isLoading 标 true,给 SwiftUI 至少一帧显示 ProgressView。
