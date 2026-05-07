@@ -19,7 +19,7 @@
 
 ## 待完成
 
-- [ ] M3.1 - M3.6 ...(详见 spec §8.6)**— Phase 3 Task 层 → v0.5**
+- [ ] M3.2 - M3.6 ...(详见 spec §8.6)**— Phase 3 剩余 → v0.5**
 - [ ] M4.1 - M4.4 ...(详见 spec §8.7)**— Phase 4 生产级化 → v1.0**
 
 ---
@@ -48,6 +48,61 @@ Cairn 从 M0.1 probe 到 v0.1 Beta 发布,共 **12 个 milestone**(7 个 Phase 1
 ---
 
 ## 已完成(逆序)
+
+### M3.1 Task 层 + Sidebar Task 列表
+
+**Completed**: 2026-05-07
+**Tag**: `m3-1-done`
+**Commits**: 6 个(`71d221c` TaskService + DAO 反查 / `7c25fbd` TaskListViewModel / `4b2a093` TaskRow / `0b36082` SidebarView+MainWindow+SplitCoordinator+CairnApp 装配 / `c0fa7ee` 11 单测 / `ecf5589` scaffold bump 0.1.1-m3.1)
+
+**Summary**:
+- **`TaskService`**(CairnServices,enum + static):`findOrCreate(sessionId:workspaceId:cwd:in db:)` —— 1 session = 1 task(spec §2.2 v1 默认),Title 派生 `{cwd 末段} @ {MM-dd HH:mm}` 本地时区,空 cwd fallback `Untitled`
+- **`TaskDAO.fetchTaskBySessionId(_:in:)`** 加 SQL `SELECT task_id FROM task_sessions WHERE session_id = ? LIMIT 1` —— 反查不走索引(数据量小先 full scan,M3.x 视性能加 index)
+- **`TaskListViewModel`**(CairnServices,`@Observable @MainActor`):`reload(workspaceId:)` 拉全 + `upsert(_:)` remove+insert atop(M3.x update 路径仍按 updatedAt DESC)+ `highlightedTaskId(forActiveSessionId:)` 派生(单一 source-of-truth = active tab)
+- **`TaskRow`**(CairnUI,`internal`):状态 dot + title + relative time(now/m/h/d/MM-dd 5 段)+ accent.opacity(0.15) 高亮背景;4 态 SF Symbol(active 蓝实心 / completed 灰空心 / abandoned 橙 circle.slash / archived 灰 tray.fill)
+- **`SidebarView` 改造**:`init(vm:activeBoundSessionId:onTapTask:)`,空态保留(文案改"No tasks yet")+ ScrollView+LazyVStack+ForEach 渲染;高亮派生从 active tab.boundSessionId 反推
+- **`SplitCoordinator.findTab(boundSessionId:)`** 加,扫所有 groups.tabs 找 boundClaudeSessionId match
+- **`MainWindowView.handleTaskTap`**:`split.findTab` 命中 → `activeGroupIndex = i; group.activateTab(id:)` → `.task(id:)` 自动跟随;miss 则 fallback `timelineVM.switchSession(sid)`(M3.6 历史 task 走这条)
+- **`CairnApp` 装配**:AppDelegate / @State 双持 `taskListVM`;`initializeDatabase` 创建 + reload(default workspace);broker.onBind closure 尾部追加 TaskService.findOrCreate + vm.upsert,**保留 M2.6 "立即切 vm" 逻辑**(显式 capture list `[weak vm, weak taskListVM, split, db, defaultWorkspaceId]`)
+- 210 单测全绿(原 199 + M3.1 新 11:7 TaskService + 4 TaskListVM)
+
+**架构合规**(spec §3.2):
+- TaskService / TaskListViewModel 在 CairnServices,只依赖 CairnCore + CairnStorage
+- TaskRow 在 CairnUI,只 import CairnCore
+- SidebarView 在 CairnUI,import CairnServices(Package.swift 依赖已就绪)
+- SplitCoordinator.findTab 在 CairnTerminal(groups 在那边,单一职责)
+- 装配在 CairnApp(orchestrator 层)
+
+**关键设计决策**(plan pinned 25 条 + 4 轮自检 13 处修订):
+- **1 session = 1 task**(v1 默认,spec §2.2);schema 支持 N 但 v1 强制 length=1
+- **Task 自动创建时机:broker.onBind**(不是 watcher.discovered)—— broker 已做 cwd 过滤,外部 session 不会触发 task 创建
+- **Title v1 用 cwd 末段**(简洁稳定,broker.onBind 时 cwd 已知);first user_message 派生留 M3.x
+- **Sidebar 高亮派生 = 当前 active tab.boundSessionId 反推**(单一 source-of-truth,Tab 是用户主操作单元)
+- **TaskListViewModel 不订阅 stream**——纯 hook 模式(broker.onBind 外部调 vm.upsert)
+- **upsert 实现 remove+insert atop**——M3.x update 仍按 updatedAt DESC
+- **TaskService 不维护内存缓存**——每次 findOrCreate 走 DAO 反查
+- **broker.onBind closure 扩展不 replace**——保留 M2.6 立即切 vm 逻辑,尾部追加 task 创建
+- **handleTaskTap 用 SplitCoordinator.findTab + group.activateTab(id:)** 而非裸赋值 activeTabId(封装更干净)
+- **测试 fixture 必须 seedSession(SessionDAO.upsert)**——`task_sessions.session_id` FK 约束(round 4 外发现的执行阶段错误,5 测全 fail 后修复)
+
+**执行阶段修正 1 处**:
+- T7 测试初版 fixture 漏 seedSession,导致 5/11 tests 因 SQLite FK 19 失败 —— 加 `seedSession(_:in:)` helper,所有写 task_sessions 的测试前调用
+
+**Acceptance**: T8 自检 swift build + swift test 210 passed;T10 用户实际跑 Cairn.app 看 Sidebar 显示 + 点击切换。
+
+**Known limitations**(M3.2-M3.6 + v1.x 解决):
+- **历史 JSONL 导入**:M3.6;现状只对 broker 新绑的 session 创 task,历史 session(mtime > 2min)events 在 DB 但无 task
+- **First user_message 派生 title**:M3.x 升级
+- **Budget %**:M3.3 BudgetTracker 后 TaskRow 加
+- **右键菜单**(归档/完成/重命名/合并):M3.2
+- **筛选 / 搜索**:M3.x
+- **拖拽迁移 workspace**:v1.1
+- **多 workspace**:M3.5;现状 default workspace 单一
+- **task_sessions(session_id) 反查索引**:M3.x 视性能加
+- **同 tab 二跑 claude**(M2.6 已知限制延伸):tab 已绑 sessionA,同 tab 起新 claude(sessionB),broker 跳过 → sessionB 不创 task;v1.5+ "session 切换历史" 配套
+- **重启后 active tab UUID 变 → 高亮丢**:M1.5 已知;sessionId 反推不受影响,跑 claude 重新绑后即恢复
+
+---
 
 ### M2.7 v0.1 Beta 打磨 + DMG + GitHub Release
 
