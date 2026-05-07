@@ -79,6 +79,19 @@ public final class SplitCoordinator {
         }
     }
 
+    // MARK: - 反查(M3.1 Sidebar 点 task → 切对应 tab)
+
+    /// 按 boundClaudeSessionId 找对应 tab 所在的 (groupIndex, tabId)。
+    /// 用于 M3.1 Sidebar 点 task 时切到对应 tab;M3.6 历史 task 找不到 tab → nil。
+    public func findTab(boundSessionId: UUID) -> (groupIndex: Int, tabId: UUID)? {
+        for (i, g) in groups.enumerated() {
+            if let tab = g.tabs.first(where: { $0.boundClaudeSessionId == boundSessionId }) {
+                return (i, tab.id)
+            }
+        }
+        return nil
+    }
+
     // MARK: - Replace groups(restore + 测试共用)
 
     /// 用给定 groups 替换当前状态。LayoutSerializer.restore 和测试都用。

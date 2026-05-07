@@ -35,6 +35,8 @@ final class CairnAppDelegate: NSObject, NSApplicationDelegate {
     var broker: TabSessionBroker?
     /// M2.6 Session lifecycle monitor(30s tick + 5 态机)
     var lifecycleMonitor: SessionLifecycleMonitor?
+    /// M3.1 Task list view model(Sidebar)
+    var taskListVM: TaskListViewModel?
 
     /// v1 defaultWorkspaceId:硬编码 UUID,跨启动稳定。M3.5 Workspace 管理
     /// 就位后替换为真实 workspace id。
@@ -103,6 +105,8 @@ struct CairnApp: App {
     /// M2.4 双持:delegate 持生命周期版,@State 持 UI 观察版。
     /// initializeDatabase 里同时 set 两处。
     @State private var timelineVM: TimelineViewModel?
+    /// M3.1 Task list VM:同样双持(AppDelegate + @State)
+    @State private var taskListVM: TaskListViewModel?
 
     var body: some Scene {
         WindowGroup("Cairn", content: {
@@ -110,7 +114,8 @@ struct CairnApp: App {
                 columnVisibility: $columnVisibility,
                 showInspector: $showInspector,
                 split: split,
-                timelineVM: timelineVM
+                timelineVM: timelineVM,
+                taskListVM: taskListVM
             )
             .task {
                 await initializeDatabase()
@@ -295,16 +300,43 @@ struct CairnApp: App {
         appDelegate.timelineVM = vm
         self.timelineVM = vm  // ← 触发 SwiftUI 重渲 RightPanelView
 
+        // M3.1:TaskListViewModel(Sidebar)— 启动时一次性 reload
+        let taskListVM = TaskListViewModel(database: db)
+        await taskListVM.reload(workspaceId: appDelegate.defaultWorkspaceId)
+        appDelegate.taskListVM = taskListVM
+        self.taskListVM = taskListVM  // ← 触发 SwiftUI 重渲 SidebarView
+
         // M2.6:TabSessionBroker + SessionLifecycleMonitor
+        // M3.1:onBind closure 扩展 —— 保留 M2.6 立即切 vm 逻辑,尾部追加
+        // TaskService.findOrCreate 创建/找回 task + Sidebar upsert。
+        let defaultWorkspaceId = appDelegate.defaultWorkspaceId
         let broker = TabSessionBroker(
             split: split, watcher: watcher,
-            onBind: { [weak vm, split] tab, sessionId in
+            onBind: { [weak vm, weak taskListVM, split, db, defaultWorkspaceId] tab, sessionId in
+                // —— M2.6 原逻辑保留 ——
                 // 绑定后若此 tab 正在 active,立即切 vm 到新 session
                 // (.task(id:) 也会触发,但让 broker 在绑定同 event loop 里主动切,
                 //  "新 session 第一刻"无延迟)
                 if tab.id == split.groups[split.activeGroupIndex].activeTabId {
                     Task { @MainActor in
                         await vm?.switchSession(sessionId)
+                    }
+                }
+                // —— M3.1 新增:Task 自动创建 + Sidebar upsert ——
+                let cwd = tab.cwd
+                Task { @MainActor in
+                    do {
+                        let task = try await TaskService.findOrCreate(
+                            sessionId: sessionId,
+                            workspaceId: defaultWorkspaceId,
+                            cwd: cwd,
+                            in: db
+                        )
+                        taskListVM?.upsert(task)
+                    } catch {
+                        FileHandle.standardError.write(Data(
+                            "[m3.1] TaskService.findOrCreate 失败 \(error)\n".utf8
+                        ))
                     }
                 }
             }
