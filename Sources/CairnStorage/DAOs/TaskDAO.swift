@@ -77,6 +77,27 @@ public enum TaskDAO {
         }
     }
 
+    /// 按 sessionId 反查 task。M3.1:broker.onBind 时判断 task 是否已存在。
+    /// 单 session = 1 task(v1 默认),task_sessions 关联表 LIMIT 1。
+    public static func fetchTaskBySessionId(
+        _ sessionId: UUID,
+        in db: CairnDatabase
+    ) async throws -> CairnTask? {
+        try await db.read { db in
+            let taskId = try UUID.fetchOne(
+                db,
+                sql: """
+                    SELECT task_id FROM task_sessions
+                    WHERE session_id = ?
+                    LIMIT 1
+                """,
+                arguments: [sessionId.uuidString]
+            )
+            guard let taskId else { return nil }
+            return try Self.fetchSync(id: taskId, db: db)
+        }
+    }
+
     public static func delete(id: UUID, in db: CairnDatabase) async throws {
         try await db.write { db in
             // task_sessions 通过 ON DELETE CASCADE 自动删除,这里只删 tasks 行
